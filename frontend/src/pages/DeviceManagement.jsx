@@ -1,37 +1,69 @@
-import React from 'react';
-import { useState } from "react";
+import React from "react";
+import { useMemo, useState } from "react";
+import { discoveredDevices } from "../data/discoveredDevices";
 
-const deviceInventory = [
-  { id: 1, hostname: "core-sw-01", ip: "10.1.0.1", type: "Core Switch", status: "Healthy" },
-  { id: 2, hostname: "edge-rt-01", ip: "192.168.1.10", type: "Router", status: "Warning" },
-  { id: 3, hostname: "db-cluster-01", ip: "10.20.0.12", type: "Database", status: "Healthy" },
-  { id: 4, hostname: "ap-west-3rdfloor", ip: "10.15.0.8", type: "Access Point", status: "Offline" },
-];
+const filters = ["All", "Routers", "Switches", "Hosts", "Servers"];
+const filterTypes = {
+  Routers: "Router",
+  Switches: "Switch",
+  Hosts: "Host",
+  Servers: "Server",
+};
 
 function DeviceManagement({ onViewDevice }) {
-  const [devices, setDevices] = useState(deviceInventory);
+  const [devices, setDevices] = useState(discoveredDevices);
   const [showForm, setShowForm] = useState(false);
-  const [newDevice, setNewDevice] = useState({ hostname: "", ip: "", type: "Switch", status: "Healthy" });
+  const [activeFilter, setActiveFilter] = useState("All");
+  const [search, setSearch] = useState("");
+  const [newDevice, setNewDevice] = useState({
+    hostname: "",
+    ipAddress: "",
+    deviceType: "Switch",
+    os: "",
+    site: "Main Site",
+    status: "Online",
+  });
+
+  const visibleDevices = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return devices.filter((device) => {
+      const matchesType = activeFilter === "All" || device.deviceType === filterTypes[activeFilter];
+      const matchesSearch = !query || [
+        device.hostname,
+        device.ipAddress,
+        device.deviceType,
+        device.site,
+        device.status,
+      ].some((value) => value.toLowerCase().includes(query));
+      return matchesType && matchesSearch;
+    });
+  }, [activeFilter, devices, search]);
 
   const handleAdd = (event) => {
     event.preventDefault();
+    if (!newDevice.hostname.trim() || !newDevice.ipAddress.trim()) return;
 
-    if (!newDevice.hostname || !newDevice.ip) {
-      return;
-    }
+    const device = {
+      ...newDevice,
+      id: newDevice.hostname.trim(),
+      hostname: newDevice.hostname.trim(),
+      ipAddress: newDevice.ipAddress.trim(),
+      latencyMs: 0,
+      packetLoss: 0,
+      discoveredMethod: "Manually Added",
+      lastChecked: "Not checked",
+      configurationPending: true,
+    };
 
-    setDevices((current) => [
-      ...current,
-      {
-        id: Date.now(),
-        hostname: newDevice.hostname,
-        ip: newDevice.ip,
-        type: newDevice.type,
-        status: newDevice.status,
-      },
-    ]);
-
-    setNewDevice({ hostname: "", ip: "", type: "Switch", status: "Healthy" });
+    setDevices((current) => [...current, device]);
+    setNewDevice({
+      hostname: "",
+      ipAddress: "",
+      deviceType: "Switch",
+      os: "",
+      site: "Main Site",
+      status: "Online",
+    });
     setShowForm(false);
   };
 
@@ -50,7 +82,6 @@ function DeviceManagement({ onViewDevice }) {
       {showForm && (
         <section className="panel-card compact-panel">
           <h3>Add new device</h3>
-
           <form className="inline-form" onSubmit={handleAdd}>
             <label>
               <span>Hostname</span>
@@ -58,27 +89,47 @@ function DeviceManagement({ onViewDevice }) {
                 type="text"
                 value={newDevice.hostname}
                 onChange={(event) => setNewDevice((current) => ({ ...current, hostname: event.target.value }))}
+                required
               />
             </label>
             <label>
               <span>IP Address</span>
               <input
                 type="text"
-                value={newDevice.ip}
-                onChange={(event) => setNewDevice((current) => ({ ...current, ip: event.target.value }))}
+                value={newDevice.ipAddress}
+                onChange={(event) => setNewDevice((current) => ({ ...current, ipAddress: event.target.value }))}
+                required
               />
             </label>
             <label>
               <span>Device Type</span>
               <select
-                value={newDevice.type}
-                onChange={(event) => setNewDevice((current) => ({ ...current, type: event.target.value }))}
+                value={newDevice.deviceType}
+                onChange={(event) => setNewDevice((current) => ({ ...current, deviceType: event.target.value }))}
               >
                 <option>Switch</option>
                 <option>Router</option>
-                <option>Access Point</option>
-                <option>Firewall</option>
-                <option>Database</option>
+                <option>Host</option>
+                <option>Server</option>
+              </select>
+            </label>
+            <label>
+              <span>OS</span>
+              <input
+                type="text"
+                value={newDevice.os}
+                onChange={(event) => setNewDevice((current) => ({ ...current, os: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Site</span>
+              <select
+                value={newDevice.site}
+                onChange={(event) => setNewDevice((current) => ({ ...current, site: event.target.value }))}
+              >
+                <option>Management</option>
+                <option>Main Site</option>
+                <option>Branch Site</option>
               </select>
             </label>
             <label>
@@ -87,7 +138,7 @@ function DeviceManagement({ onViewDevice }) {
                 value={newDevice.status}
                 onChange={(event) => setNewDevice((current) => ({ ...current, status: event.target.value }))}
               >
-                <option>Healthy</option>
+                <option>Online</option>
                 <option>Warning</option>
                 <option>Offline</option>
               </select>
@@ -98,34 +149,72 @@ function DeviceManagement({ onViewDevice }) {
       )}
 
       <section className="panel-card">
-        <table className="data-table device-table">
-          <thead>
-            <tr>
-              <th>Hostname</th>
-              <th>IP Address</th>
-              <th>Device Type</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {devices.map((device) => (
-              <tr key={device.id}>
-                <td>{device.hostname}</td>
-                <td>{device.ip}</td>
-                <td>{device.type}</td>
-                <td>
-                  <span className={`status-tag ${device.status.toLowerCase()}`}>{device.status}</span>
-                </td>
-                <td className="action-cell">
-                  <button type="button" className="secondary-button small-button" onClick={() => onViewDevice(device)}>
-                    View Details
-                  </button>
-                </td>
-              </tr>
+        <div className="inventory-toolbar">
+          <div className="device-filters" role="group" aria-label="Filter devices by type">
+            {filters.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                className={`filter-chip ${activeFilter === filter ? "active" : ""}`}
+                onClick={() => setActiveFilter(filter)}
+              >
+                {filter}
+              </button>
             ))}
-          </tbody>
-        </table>
+          </div>
+          <input
+            className="device-search"
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search hostname, IP, site, or status"
+            aria-label="Search devices"
+          />
+        </div>
+
+        <div className="table-scroll">
+          <table className="data-table device-table">
+            <thead>
+              <tr>
+                <th>Hostname</th>
+                <th>IP Address</th>
+                <th>Device Type</th>
+                <th>Site</th>
+                <th>Status</th>
+                <th>Discovery</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleDevices.map((device) => (
+                <tr key={device.id}>
+                  <td>{device.hostname}</td>
+                  <td>{device.ipAddress}</td>
+                  <td>{device.deviceType}</td>
+                  <td>{device.site}</td>
+                  <td>
+                    <span className={`status-tag ${device.status.toLowerCase()}`}>{device.status}</span>
+                  </td>
+                  <td>
+                    <span className="discovered-tag">
+                      {device.discoveredMethod === "Topology Scan / ARP" ? "Discovered" : "Manual"}
+                    </span>
+                  </td>
+                  <td className="action-cell">
+                    <button type="button" className="secondary-button small-button" onClick={() => onViewDevice(device)}>
+                      View Details
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {visibleDevices.length === 0 && (
+                <tr>
+                  <td colSpan="7" className="empty-table-message">No devices match this search.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );

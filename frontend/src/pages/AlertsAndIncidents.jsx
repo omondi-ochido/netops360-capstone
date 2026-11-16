@@ -1,21 +1,26 @@
 import React from 'react';
 import { useMemo, useState } from "react";
+import { discoveredDevices } from "../data/discoveredDevices";
 
 const incidentSeed = [
-  { id: "INC-2049", device: "Edge-RT-01", trigger: "Packet loss > 25%", severity: "Critical", status: "Open", time: "4m ago" },
-  { id: "INC-2048", device: "AP-West-3rdFloor", trigger: "SSH unreachable", severity: "Critical", status: "Open", time: "8m ago" },
-  { id: "INC-2047", device: "DB-Cluster-01", trigger: "ICMP health check failed", severity: "Critical", status: "Investigating", time: "12m ago" },
-  { id: "INC-2046", device: "Core-SW-04", trigger: "CPU spike", severity: "Warning", status: "Open", time: "16m ago" },
-  { id: "INC-2045", device: "BGP Peer", trigger: "Route instability", severity: "Info", status: "Resolved", time: "30m ago" },
+  { id: "INC-2049", deviceId: "main-rtr", trigger: "Packet loss above threshold", severity: "Critical", status: "Open", time: "4m ago" },
+  { id: "INC-2048", deviceId: "branch-rtr", trigger: "Router configuration pending", severity: "Warning", status: "Investigating", time: "8m ago" },
+  { id: "INC-2047", deviceId: "SW1", trigger: "Switch reachability check", severity: "Info", status: "Open", time: "12m ago" },
+  { id: "INC-2046", deviceId: "MAIN-SERVER", trigger: "Server health check", severity: "Info", status: "Open", time: "16m ago" },
+  { id: "INC-2045", deviceId: "PC4", trigger: "Host response time monitor", severity: "Info", status: "Resolved", time: "30m ago" },
 ];
 
 function AlertsAndIncidents() {
   const [filter, setFilter] = useState("All");
+  const [deviceFilter, setDeviceFilter] = useState("All");
 
   const list = useMemo(() => {
-    if (filter === "All") return incidentSeed;
-    return incidentSeed.filter((item) => item.status === filter || item.severity === filter);
-  }, [filter]);
+    return incidentSeed.filter((item) => {
+      const matchesFilter = filter === "All" || item.status === filter || item.severity === filter;
+      const matchesDevice = deviceFilter === "All" || item.deviceId === deviceFilter;
+      return matchesFilter && matchesDevice;
+    });
+  }, [deviceFilter, filter]);
 
   return (
     <div className="page-stack">
@@ -39,6 +44,17 @@ function AlertsAndIncidents() {
               {item}
             </button>
           ))}
+          <select
+            className="device-select-filter"
+            value={deviceFilter}
+            onChange={(event) => setDeviceFilter(event.target.value)}
+            aria-label="Filter incidents by device"
+          >
+            <option value="All">All devices</option>
+            {discoveredDevices.map((device) => (
+              <option key={device.id} value={device.id}>{device.hostname}</option>
+            ))}
+          </select>
         </div>
 
         <table className="data-table incident-table">
@@ -57,7 +73,7 @@ function AlertsAndIncidents() {
             {list.map((incident) => (
               <tr key={incident.id}>
                 <td>{incident.id}</td>
-                <td>{incident.device}</td>
+                <td>{discoveredDevices.find((device) => device.id === incident.deviceId)?.hostname || incident.deviceId}</td>
                 <td>{incident.trigger}</td>
                 <td>
                   <span className={`severity-pill ${incident.severity.toLowerCase()}`}>{incident.severity}</span>

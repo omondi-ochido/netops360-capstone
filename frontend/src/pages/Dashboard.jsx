@@ -1,37 +1,43 @@
-import React from 'react';
+import React from "react";
+import { discoveredDevices } from "../data/discoveredDevices";
+
+const onlineCount = discoveredDevices.filter((device) => device.status === "Online").length;
+const warningCount = discoveredDevices.filter((device) => device.status === "Warning").length;
+const offlineCount = discoveredDevices.filter((device) => device.status === "Offline").length;
+const needsAttentionCount = warningCount + offlineCount;
+const onlinePercentage = (onlineCount / discoveredDevices.length) * 100;
+const warningEndPercentage = ((onlineCount + warningCount) / discoveredDevices.length) * 100;
 const kpis = [
-  { label: "Total Devices", value: "148", delta: "+4 this week" },
-  { label: "Online", value: "141", delta: "95.3% healthy" },
-  { label: "Offline", value: "3", delta: "1 action required" },
-  { label: "Active Incidents", value: "4", delta: "2 warn / 1 critical" },
+  { label: "Total Devices", value: discoveredDevices.length, delta: "Discovered in GNS3 topology" },
+  { label: "Online", value: onlineCount, delta: "Responding devices" },
+  { label: "Warning / Offline", value: needsAttentionCount, delta: "Require attention" },
+  { label: "Active Incidents", value: needsAttentionCount, delta: "Based on device status" },
 ];
 
-const statusRows = [
-  { hostname: "core-sw-01", ip: "10.1.0.1", type: "Switch", status: "Healthy", uptime: "99.9%" },
-  { hostname: "edge-rt-01", ip: "192.168.1.10", type: "Router", status: "Warning", uptime: "96.2%" },
-  { hostname: "db-cluster-01", ip: "10.20.0.12", type: "Database", status: "Healthy", uptime: "99.8%" },
-  { hostname: "ap-west-3rdfloor", ip: "10.15.0.8", type: "Access Point", status: "Offline", uptime: "92.1%" },
-];
+const recentAlerts = discoveredDevices
+  .filter((device) => device.status !== "Online")
+  .map((device) => ({
+    severity: device.status === "Warning" ? "Warning" : "Critical",
+    message: `${device.hostname} is ${device.status.toLowerCase()}`,
+    time: device.configurationPending ? "Pending console boot" : device.lastChecked,
+  }));
 
-const recentAlerts = [
-  { severity: "Critical", message: "Packet loss > 25% on Edge-RT-01", time: "4 minutes ago" },
-  { severity: "Warning", message: "CPU spike detected on Core-SW-04", time: "11 minutes ago" },
-  { severity: "Critical", message: "AP-West-3rdFloor unreachable via SSH", time: "18 minutes ago" },
-  { severity: "Info", message: "BGP peer flapping on ASN 56402", time: "29 minutes ago" },
-];
-
-function Dashboard() {
+function Dashboard({ onViewDevice, onNavigate }) {
   return (
     <div className="page-stack dashboard-page">
       <section className="page-header-row">
         <div>
           <h2>Welcome back, Marcus</h2>
-          <p>Friday, Nov 15, 2026 • 10:27 UTC • Fleet status synchronized</p>
+          <p>GNS3 topology inventory • Fleet status synchronized</p>
         </div>
         <div className="header-button-group">
           <button type="button" className="secondary-button">Run Ping Sweep</button>
-          <button type="button" className="secondary-button">View Active Alerts</button>
-          <button type="button" className="primary-button">+ Add Device</button>
+          <button type="button" className="secondary-button" onClick={() => onNavigate("alerts")}>
+            View Active Alerts
+          </button>
+          <button type="button" className="primary-button" onClick={() => onNavigate("devices")}>
+            View Devices
+          </button>
         </div>
       </section>
 
@@ -52,7 +58,7 @@ function Dashboard() {
               <span className="eyebrow-text">SLA</span>
               <h3>Network health overview</h3>
             </div>
-            <span className="status-badge neutral">Last 24h</span>
+            <span className="status-badge neutral">Topology scan</span>
           </div>
 
           <div className="chart-box">
@@ -73,64 +79,79 @@ function Dashboard() {
           </div>
 
           <div className="donut-wrap">
-            <div className="donut-chart">
-              <span>148</span>
+            <div
+              className="donut-chart"
+              style={{
+                background: `conic-gradient(#16a34a 0 ${onlinePercentage}%, #f59e0b ${onlinePercentage}% ${warningEndPercentage}%, #ef4444 ${warningEndPercentage}% 100%)`,
+              }}
+            >
+              <span>{discoveredDevices.length}</span>
             </div>
             <ul className="legend-list">
-              <li><span className="legend-dot green" /> Healthy 141</li>
-              <li><span className="legend-dot amber" /> Warning 4</li>
-              <li><span className="legend-dot red" /> Critical 3</li>
+              <li><span className="legend-dot green" /> Online {onlineCount}</li>
+              <li><span className="legend-dot amber" /> Warning {warningCount}</li>
+              <li><span className="legend-dot red" /> Offline {offlineCount}</li>
             </ul>
           </div>
         </div>
       </section>
 
-      <section className="content-row split-row">
-        <div className="panel-card table-panel">
-          <div className="panel-header-row">
-            <div>
-              <span className="eyebrow-text">Status</span>
-              <h3>Device status summary</h3>
-            </div>
+      <section className="panel-card table-panel">
+        <div className="panel-header-row">
+          <div>
+            <span className="eyebrow-text">Inventory</span>
+            <h3>Discovered Network Devices</h3>
           </div>
+          <button type="button" className="secondary-button small-button" onClick={() => onNavigate("devices")}>
+            Full inventory
+          </button>
+        </div>
 
+        <div className="table-scroll">
           <table className="data-table">
             <thead>
               <tr>
                 <th>Hostname</th>
-                <th>IP</th>
+                <th>IP Address</th>
                 <th>Type</th>
+                <th>Site</th>
                 <th>Status</th>
-                <th>Uptime</th>
+                <th>Details</th>
               </tr>
             </thead>
             <tbody>
-              {statusRows.map((row) => (
-                <tr key={row.hostname}>
-                  <td>{row.hostname}</td>
-                  <td>{row.ip}</td>
-                  <td>{row.type}</td>
+              {discoveredDevices.map((device) => (
+                <tr key={device.id}>
+                  <td>{device.hostname}</td>
+                  <td>{device.ipAddress}</td>
+                  <td>{device.deviceType}</td>
+                  <td>{device.site}</td>
                   <td>
-                    <span className={`status-tag ${row.status.toLowerCase()}`}>{row.status}</span>
+                    <span className={`status-tag ${device.status.toLowerCase()}`}>{device.status}</span>
                   </td>
-                  <td>{row.uptime}</td>
+                  <td>
+                    <button type="button" className="secondary-button small-button" onClick={() => onViewDevice(device)}>
+                      View details
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </section>
 
-        <div className="panel-card alerts-panel">
-          <div className="panel-header-row">
-            <div>
-              <span className="eyebrow-text">Alerts</span>
-              <h3>Recent alerts</h3>
-            </div>
+      <section className="panel-card alerts-panel">
+        <div className="panel-header-row">
+          <div>
+            <span className="eyebrow-text">Alerts</span>
+            <h3>Recent alerts</h3>
           </div>
-
+        </div>
+        {recentAlerts.length ? (
           <ul className="alert-list">
             {recentAlerts.map((alert) => (
-              <li key={`${alert.message}-${alert.time}`}>
+              <li key={alert.message}>
                 <div className={`alert-severity ${alert.severity.toLowerCase()}`}>{alert.severity}</div>
                 <div>
                   <strong>{alert.message}</strong>
@@ -139,7 +160,9 @@ function Dashboard() {
               </li>
             ))}
           </ul>
-        </div>
+        ) : (
+          <p>No devices currently need attention.</p>
+        )}
       </section>
     </div>
   );

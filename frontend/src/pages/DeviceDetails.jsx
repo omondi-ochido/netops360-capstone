@@ -1,20 +1,27 @@
-import React from 'react';
-function DeviceDetails({ device, onBack }) {
-  const safeDevice = device || {
-    hostname: "edge-rt-01",
-    ip: "192.168.1.10",
-    type: "Router",
-    status: "Warning",
-    location: "Rack A1",
-    model: "ISR 4351",
-  };
+import React from "react";
+import { discoveredDevices } from "../data/discoveredDevices";
+
+function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
+  const device = discoveredDevices.find((item) => item.id === deviceId) || selectedDevice;
+
+  if (!device) {
+    return (
+      <div className="page-stack">
+        <section className="panel-card">
+          <h2>Device not found</h2>
+          <p>The selected device is not in the discovered topology inventory.</p>
+          <button type="button" className="secondary-button" onClick={onBack}>Back to inventory</button>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="page-stack">
       <section className="page-header-row">
         <div>
-          <h2>{safeDevice.hostname}</h2>
-          <p>{safeDevice.type} • {safeDevice.ip}</p>
+          <h2>{device.hostname}</h2>
+          <p>{device.deviceType} • {device.ipAddress} • {device.site}</p>
         </div>
         <div className="header-button-group">
           <button type="button" className="secondary-button" onClick={onBack}>Back to inventory</button>
@@ -29,16 +36,17 @@ function DeviceDetails({ device, onBack }) {
               <span className="eyebrow-text">Overview</span>
               <h3>Device info</h3>
             </div>
-            <span className={`status-tag ${safeDevice.status.toLowerCase()}`}>{safeDevice.status}</span>
+            <span className={`status-tag ${device.status.toLowerCase()}`}>{device.status}</span>
           </div>
 
           <div className="info-grid">
-            <div><label>Hostname</label><strong>{safeDevice.hostname}</strong></div>
-            <div><label>IP Address</label><strong>{safeDevice.ip}</strong></div>
-            <div><label>Device Type</label><strong>{safeDevice.type}</strong></div>
-            <div><label>Location</label><strong>{safeDevice.location || "Rack A1"}</strong></div>
-            <div><label>Model</label><strong>{safeDevice.model || "ISR 4351"}</strong></div>
-            <div><label>Last Sync</label><strong>2m ago</strong></div>
+            <div><label>Hostname</label><strong>{device.hostname}</strong></div>
+            <div><label>IP Address</label><strong>{device.ipAddress}</strong></div>
+            <div><label>Device Type</label><strong>{device.deviceType}</strong></div>
+            <div><label>Operating System</label><strong>{device.os || "Not specified"}</strong></div>
+            <div><label>Site</label><strong>{device.site}</strong></div>
+            <div><label>Discovery Method</label><strong>{device.discoveredMethod}</strong></div>
+            <div><label>Last Checked</label><strong>{device.lastChecked}</strong></div>
           </div>
         </div>
 
@@ -53,19 +61,19 @@ function DeviceDetails({ device, onBack }) {
           <div className="metric-list">
             <div>
               <span>Latency</span>
-              <strong>18.4 ms</strong>
+              <strong>{device.latencyMs} ms</strong>
             </div>
             <div>
               <span>Packet loss</span>
-              <strong>0.82%</strong>
+              <strong>{device.packetLoss}%</strong>
             </div>
             <div>
-              <span>Throughput</span>
-              <strong>2.4 Gbps</strong>
+              <span>Status</span>
+              <strong>{device.status}</strong>
             </div>
             <div>
-              <span>Uplink</span>
-              <strong>Healthy</strong>
+              <span>Site</span>
+              <strong>{device.site}</strong>
             </div>
           </div>
         </div>
@@ -79,16 +87,20 @@ function DeviceDetails({ device, onBack }) {
           </div>
         </div>
 
-        <div className="backup-row">
-          <div className="backup-meta">
-            <strong>Last backup</strong>
-            <span>Today at 09:42 UTC</span>
+        {device.configurationPending ? (
+          <p className="configuration-pending">Configuration pending console boot</p>
+        ) : (
+          <div className="backup-row">
+            <div className="backup-meta">
+              <strong>Last backup</strong>
+              <span>Not yet retrieved</span>
+            </div>
+            <div className="header-button-group">
+              <button type="button" className="secondary-button">Retrieve Config</button>
+              <button type="button" className="primary-button">Download Backup</button>
+            </div>
           </div>
-          <div className="header-button-group">
-            <button type="button" className="secondary-button">Retrieve Config</button>
-            <button type="button" className="primary-button">Download Backup</button>
-          </div>
-        </div>
+        )}
       </section>
 
       <section className="action-grid">

@@ -21,6 +21,7 @@ const pageTitles = {
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activePage, setActivePage] = useState("dashboard");
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [selectedDevice, setSelectedDevice] = useState(null);
 
   const handleNavigate = (page) => {
@@ -28,11 +29,13 @@ function App() {
   };
 
   const handleViewDevice = (device) => {
+    setSelectedDeviceId(device.id);
     setSelectedDevice(device);
     setActivePage("device-details");
   };
 
   const handleBackToDevices = () => {
+    setSelectedDeviceId(null);
     setSelectedDevice(null);
     setActivePage("devices");
   };
@@ -40,17 +43,18 @@ function App() {
   const handleLogout = () => {
     setIsAuthenticated(false);
     setActivePage("dashboard");
+    setSelectedDeviceId(null);
     setSelectedDevice(null);
   };
 
   const renderPage = () => {
     switch (activePage) {
       case "dashboard":
-        return <Dashboard />;
+        return <Dashboard onViewDevice={handleViewDevice} onNavigate={handleNavigate} />;
       case "devices":
         return <DeviceManagement onViewDevice={handleViewDevice} />;
       case "device-details":
-        return <DeviceDetails device={selectedDevice} onBack={handleBackToDevices} />;
+        return <DeviceDetails deviceId={selectedDeviceId} device={selectedDevice} onBack={handleBackToDevices} />;
       case "alerts":
         return <AlertsAndIncidents />;
       case "monitoring":

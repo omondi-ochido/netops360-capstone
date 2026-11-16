@@ -1,16 +1,17 @@
 import React from 'react';
 import { useState } from "react";
+import { discoveredDevices } from "../data/discoveredDevices";
 
 const ruleSeed = [
-  { id: 1, name: "CPU Threshold", condition: "CPU usage {'>'} 85% for 3 consecutive checks", threshold: "85%", status: "Enabled" },
-  { id: 2, name: "Packet Loss Alert", condition: "Packet loss {'>'} 12% across uplink", threshold: "12%", status: "Enabled" },
-  { id: 3, name: "Device Unreachable", condition: "ICMP timeout for 5 passes", threshold: "5 checks", status: "Disabled" },
-  { id: 4, name: "Temperature Exceeded", condition: "Chassis temp {'>'} 44°C", threshold: "44°C", status: "Enabled" },
+  { id: 1, name: "Router Reachability", deviceId: "main-rtr", condition: "Device reachable by ICMP", threshold: "3 checks", status: "Enabled" },
+  { id: 2, name: "Branch Router Latency", deviceId: "branch-rtr", condition: "Latency above threshold", threshold: "50 ms", status: "Enabled" },
+  { id: 3, name: "Switch Packet Loss", deviceId: "SW1", condition: "Packet loss above threshold", threshold: "5%", status: "Disabled" },
+  { id: 4, name: "Server Health", deviceId: "MAIN-SERVER", condition: "Server health check", threshold: "2 checks", status: "Enabled" },
 ];
 
 function MonitoringRules() {
   const [rules, setRules] = useState(ruleSeed);
-  const [form, setForm] = useState({ name: "", condition: "", threshold: "", checks: "" });
+  const [form, setForm] = useState({ name: "", deviceId: "main-rtr", condition: "", threshold: "", checks: "" });
 
   const toggleRule = (id) => {
     setRules((current) => current.map((rule) => (
@@ -31,13 +32,14 @@ function MonitoringRules() {
       {
         id: Date.now(),
         name: form.name,
+        deviceId: form.deviceId,
         condition: `${form.condition} ${form.checks ? `for ${form.checks} consecutive checks` : ""}`,
         threshold: form.threshold,
         status: "Enabled",
       },
     ]);
 
-    setForm({ name: "", condition: "", threshold: "", checks: "" });
+    setForm({ name: "", deviceId: "main-rtr", condition: "", threshold: "", checks: "" });
   };
 
   return (
@@ -74,6 +76,17 @@ function MonitoringRules() {
             </select>
           </label>
           <label>
+            <span>Device</span>
+            <select
+              value={form.deviceId}
+              onChange={(event) => setForm((current) => ({ ...current, deviceId: event.target.value }))}
+            >
+              {discoveredDevices.map((device) => (
+                <option key={device.id} value={device.id}>{device.hostname}</option>
+              ))}
+            </select>
+          </label>
+          <label>
             <span>Threshold</span>
             <input
               type="text"
@@ -100,6 +113,7 @@ function MonitoringRules() {
           <thead>
             <tr>
               <th>Rule Name</th>
+              <th>Device</th>
               <th>Condition</th>
               <th>Threshold</th>
               <th>Status</th>
@@ -110,6 +124,7 @@ function MonitoringRules() {
             {rules.map((rule) => (
               <tr key={rule.id}>
                 <td>{rule.name}</td>
+                <td>{discoveredDevices.find((device) => device.id === rule.deviceId)?.hostname || rule.deviceId}</td>
                 <td>{rule.condition}</td>
                 <td>{rule.threshold}</td>
                 <td>{rule.status}</td>

@@ -1656,6 +1656,7 @@ button {
 }
 
 .status-tag.healthy,
+.status-tag.online,
 .status-tag.enabled,
 .status-tag.executed,
 .status-tag.success {
@@ -1674,6 +1675,73 @@ button {
 .status-tag.critical {
   background: #fee2e2;
   color: #b91c1c;
+}
+
+.inventory-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.device-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.device-search,
+.device-select-filter,
+.automation-device-select {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #334155;
+  padding: 9px 12px;
+  font: inherit;
+}
+
+.device-search {
+  min-width: min(320px, 100%);
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table-scroll .data-table {
+  min-width: 760px;
+}
+
+.discovered-tag {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.empty-table-message {
+  color: #64748b;
+  text-align: center !important;
+}
+
+.configuration-pending {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.85rem;
+}
+
+.automation-device-select {
+  max-width: 180px;
 }
 
 .alert-list {
