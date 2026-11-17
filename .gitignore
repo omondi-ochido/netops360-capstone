@@ -1,20 +1,17 @@
-# Environment and secrets
-.env
-.env.*
-!.env.example
-
-# JavaScript
-node_modules/
-frontend/dist/
-
-# Python
+backend/.venv/
+.venv/
 __pycache__/
 *.py[cod]
-.venv/
-venv/
-
-# Editors and operating systems
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.env
+backend/.env
+frontend/.env
+gns3/**/*.qcow2
+gns3/**/*.iso
+gns3/**/*.vmdk
+.DS_Store
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
+setup.sh
