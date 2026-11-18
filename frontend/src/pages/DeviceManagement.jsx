@@ -1,6 +1,7 @@
 import React from "react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { discoveredDevices } from "../data/discoveredDevices";
+import { fetchDevices } from "../services/deviceService";
 
 const filters = ["All", "Routers", "Switches", "Hosts", "Servers"];
 const filterTypes = {
@@ -12,6 +13,9 @@ const filterTypes = {
 
 function DeviceManagement({ onViewDevice }) {
   const [devices, setDevices] = useState(discoveredDevices);
+  const [manualDevices, setManualDevices] = useState([]);
+  const [isLive, setIsLive] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [activeFilter, setActiveFilter] = useState("All");
   const [search, setSearch] = useState("");
@@ -24,9 +28,24 @@ function DeviceManagement({ onViewDevice }) {
     status: "Online",
   });
 
+  const refreshDevices = useCallback(async () => {
+    setIsLoading(true);
+    const result = await fetchDevices();
+    setDevices(result.devices);
+    setIsLive(result.isLive);
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void refreshDevices();
+    const intervalId = window.setInterval(refreshDevices, 15000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshDevices]);
+
+  const allDevices = useMemo(() => [...devices, ...manualDevices], [devices, manualDevices]);
   const visibleDevices = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return devices.filter((device) => {
+    return allDevices.filter((device) => {
       const matchesType = activeFilter === "All" || device.deviceType === filterTypes[activeFilter];
       const matchesSearch = !query || [
         device.hostname,
@@ -34,10 +53,10 @@ function DeviceManagement({ onViewDevice }) {
         device.deviceType,
         device.site,
         device.status,
-      ].some((value) => value.toLowerCase().includes(query));
+      ].some((value) => value?.toLowerCase().includes(query));
       return matchesType && matchesSearch;
     });
-  }, [activeFilter, devices, search]);
+  }, [activeFilter, allDevices, search]);
 
   const handleAdd = (event) => {
     event.preventDefault();
@@ -55,7 +74,7 @@ function DeviceManagement({ onViewDevice }) {
       configurationPending: true,
     };
 
-    setDevices((current) => [...current, device]);
+    setManualDevices((current) => [...current, device]);
     setNewDevice({
       hostname: "",
       ipAddress: "",
@@ -72,11 +91,17 @@ function DeviceManagement({ onViewDevice }) {
       <section className="page-header-row">
         <div>
           <h2>Device Inventory</h2>
-          <p>Manage network assets and monitor operational health.</p>
+          <p>Manage network assets and monitor operational health. {isLive ? "Live GNS3 telemetry." : "Showing fallback inventory."}</p>
         </div>
-        <button type="button" className="primary-button" onClick={() => setShowForm((value) => !value)}>
-          {showForm ? "Close" : "+ Add Device"}
-        </button>
+        <div className="header-button-group">
+          {isLive && <span className="status-badge neutral">Live GNS3 Telemetry</span>}
+          <button type="button" className="secondary-button" onClick={refreshDevices} disabled={isLoading}>
+            {isLoading ? "Refreshing..." : "Refresh Poll"}
+          </button>
+          <button type="button" className="primary-button" onClick={() => setShowForm((value) => !value)}>
+            {showForm ? "Close" : "+ Add Device"}
+          </button>
+        </div>
       </section>
 
       {showForm && (
@@ -181,6 +206,8 @@ function DeviceManagement({ onViewDevice }) {
                 <th>Device Type</th>
                 <th>Site</th>
                 <th>Status</th>
+                <th>Latency</th>
+                <th>Packet Loss</th>
                 <th>Discovery</th>
                 <th>Actions</th>
               </tr>
@@ -195,9 +222,11 @@ function DeviceManagement({ onViewDevice }) {
                   <td>
                     <span className={`status-tag ${device.status.toLowerCase()}`}>{device.status}</span>
                   </td>
+                  <td>{Number.isFinite(device.latencyMs) ? `${device.latencyMs} ms` : "N/A"}</td>
+                  <td>{Number.isFinite(device.packetLoss) ? `${device.packetLoss}%` : "N/A"}</td>
                   <td>
                     <span className="discovered-tag">
-                      {device.discoveredMethod === "Topology Scan / ARP" ? "Discovered" : "Manual"}
+                      {device.discoveredMethod === "Manually Added" ? "Manual" : "Discovered"}
                     </span>
                   </td>
                   <td className="action-cell">
@@ -209,7 +238,9 @@ function DeviceManagement({ onViewDevice }) {
               ))}
               {visibleDevices.length === 0 && (
                 <tr>
-                  <td colSpan="7" className="empty-table-message">No devices match this search.</td>
+                  <td colSpan="9" className="empty-table-message">
+                    {isLoading ? "Loading devices..." : "No devices match this search."}
+                  </td>
                 </tr>
               )}
             </tbody>

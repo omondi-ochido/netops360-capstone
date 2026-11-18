@@ -1,37 +1,95 @@
-import React from "react";
-import { discoveredDevices } from "../data/discoveredDevices";
-
-const onlineCount = discoveredDevices.filter((device) => device.status === "Online").length;
-const warningCount = discoveredDevices.filter((device) => device.status === "Warning").length;
-const offlineCount = discoveredDevices.filter((device) => device.status === "Offline").length;
-const needsAttentionCount = warningCount + offlineCount;
-const onlinePercentage = (onlineCount / discoveredDevices.length) * 100;
-const warningEndPercentage = ((onlineCount + warningCount) / discoveredDevices.length) * 100;
-const kpis = [
-  { label: "Total Devices", value: discoveredDevices.length, delta: "Discovered in GNS3 topology" },
-  { label: "Online", value: onlineCount, delta: "Responding devices" },
-  { label: "Warning / Offline", value: needsAttentionCount, delta: "Require attention" },
-  { label: "Active Incidents", value: needsAttentionCount, delta: "Based on device status" },
-];
-
-const recentAlerts = discoveredDevices
-  .filter((device) => device.status !== "Online")
-  .map((device) => ({
-    severity: device.status === "Warning" ? "Warning" : "Critical",
-    message: `${device.hostname} is ${device.status.toLowerCase()}`,
-    time: device.configurationPending ? "Pending console boot" : device.lastChecked,
-  }));
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fetchDevices } from "../services/deviceService";
 
 function Dashboard({ onViewDevice, onNavigate }) {
+  const [devices, setDevices] = useState([]);
+  const [networkEvents, setNetworkEvents] = useState([]);
+  const [isLive, setIsLive] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const previousStatuses = useRef(new Map());
+
+  const refreshDevices = useCallback(async () => {
+    setIsLoading(true);
+    const result = await fetchDevices();
+    if (result.isLive) {
+      const polledAt = new Date();
+      const nextStatuses = new Map();
+      const transitions = [];
+
+      result.devices.forEach((device) => {
+        const previousStatus = previousStatuses.current.get(device.id);
+        if (previousStatus && previousStatus !== device.status) {
+          transitions.push({
+            id: `${device.id}-${polledAt.getTime()}-${transitions.length}`,
+            hostname: device.hostname,
+            ipAddress: device.ipAddress,
+            previousStatus,
+            status: device.status,
+            timestamp: polledAt.toLocaleTimeString("en-US", {
+              hour: "numeric",
+              minute: "2-digit",
+              second: "2-digit",
+            }),
+          });
+        }
+        nextStatuses.set(device.id, device.status);
+      });
+
+      previousStatuses.current = nextStatuses;
+      if (transitions.length) {
+        setNetworkEvents((events) => [...transitions, ...events]);
+      }
+    }
+    setDevices(result.devices);
+    setIsLive(result.isLive);
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void refreshDevices();
+    const intervalId = window.setInterval(refreshDevices, 15000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshDevices]);
+
+  const onlineCount = devices.filter((device) => device.status === "Online").length;
+  const warningCount = devices.filter((device) => device.status === "Warning").length;
+  const offlineCount = devices.filter((device) => device.status === "Offline").length;
+  const measuredLatencies = devices
+    .map((device) => device.latencyMs)
+    .filter((latency) => Number.isFinite(latency));
+  const averageLatency = measuredLatencies.length
+    ? `${(measuredLatencies.reduce((total, latency) => total + latency, 0) / measuredLatencies.length).toFixed(2)} ms`
+    : "N/A";
+  const onlinePercentage = devices.length ? (onlineCount / devices.length) * 100 : 0;
+  const warningEndPercentage = devices.length
+    ? ((onlineCount + warningCount) / devices.length) * 100
+    : 0;
+  const kpis = [
+    { label: "Total Devices", value: devices.length, delta: "GNS3 topology inventory" },
+    { label: "Online", value: onlineCount, delta: "Responding devices" },
+    { label: "Offline", value: offlineCount, delta: "Unreachable devices" },
+    { label: "Avg Latency", value: averageLatency, delta: "Across measured devices" },
+  ];
+  const recentAlerts = useMemo(() => devices
+    .filter((device) => device.status !== "Online")
+    .map((device) => ({
+      severity: device.status === "Warning" ? "Warning" : "Critical",
+      message: `${device.hostname} is ${device.status.toLowerCase()}`,
+      time: device.configurationPending ? "Pending console boot" : device.lastChecked,
+    })), [devices]);
+
   return (
     <div className="page-stack dashboard-page">
       <section className="page-header-row">
         <div>
           <h2>Welcome back, Marcus</h2>
-          <p>GNS3 topology inventory • Fleet status synchronized</p>
+          <p>GNS3 topology inventory • {isLive ? "Live telemetry" : "Fallback inventory"}</p>
         </div>
         <div className="header-button-group">
-          <button type="button" className="secondary-button">Run Ping Sweep</button>
+          {isLive && <span className="status-badge neutral">Live GNS3 Telemetry</span>}
+          <button type="button" className="secondary-button" onClick={refreshDevices} disabled={isLoading}>
+            {isLoading ? "Refreshing..." : "Refresh Poll"}
+          </button>
           <button type="button" className="secondary-button" onClick={() => onNavigate("alerts")}>
             View Active Alerts
           </button>
@@ -58,7 +116,7 @@ function Dashboard({ onViewDevice, onNavigate }) {
               <span className="eyebrow-text">SLA</span>
               <h3>Network health overview</h3>
             </div>
-            <span className="status-badge neutral">Topology scan</span>
+            <span className="status-badge neutral">{isLive ? "Live poll" : "Fallback data"}</span>
           </div>
 
           <div className="chart-box">
@@ -85,7 +143,7 @@ function Dashboard({ onViewDevice, onNavigate }) {
                 background: `conic-gradient(#16a34a 0 ${onlinePercentage}%, #f59e0b ${onlinePercentage}% ${warningEndPercentage}%, #ef4444 ${warningEndPercentage}% 100%)`,
               }}
             >
-              <span>{discoveredDevices.length}</span>
+              <span>{devices.length}</span>
             </div>
             <ul className="legend-list">
               <li><span className="legend-dot green" /> Online {onlineCount}</li>
@@ -116,11 +174,13 @@ function Dashboard({ onViewDevice, onNavigate }) {
                 <th>Type</th>
                 <th>Site</th>
                 <th>Status</th>
+                <th>Latency</th>
+                <th>Packet Loss</th>
                 <th>Details</th>
               </tr>
             </thead>
             <tbody>
-              {discoveredDevices.map((device) => (
+              {devices.map((device) => (
                 <tr key={device.id}>
                   <td>{device.hostname}</td>
                   <td>{device.ipAddress}</td>
@@ -129,6 +189,8 @@ function Dashboard({ onViewDevice, onNavigate }) {
                   <td>
                     <span className={`status-tag ${device.status.toLowerCase()}`}>{device.status}</span>
                   </td>
+                  <td>{Number.isFinite(device.latencyMs) ? `${device.latencyMs} ms` : "N/A"}</td>
+                  <td>{Number.isFinite(device.packetLoss) ? `${device.packetLoss}%` : "N/A"}</td>
                   <td>
                     <button type="button" className="secondary-button small-button" onClick={() => onViewDevice(device)}>
                       View details
@@ -136,9 +198,42 @@ function Dashboard({ onViewDevice, onNavigate }) {
                   </td>
                 </tr>
               ))}
+              {devices.length === 0 && (
+                <tr><td colSpan="8" className="empty-table-message">{isLoading ? "Loading devices..." : "No devices available."}</td></tr>
+              )}
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="panel-card alerts-panel">
+        <div className="panel-header-row">
+          <div>
+            <span className="eyebrow-text">Telemetry</span>
+            <h3>Live Network Events</h3>
+          </div>
+          {isLive && <span className="status-badge neutral">Live GNS3 Telemetry</span>}
+        </div>
+        {networkEvents.length ? (
+          <ul className="alert-list">
+            {networkEvents.map((event) => (
+              <li key={event.id}>
+                <span className={`status-tag ${event.previousStatus.toLowerCase()}`}>
+                  {event.previousStatus}
+                </span>
+                <div>
+                  <strong>
+                    {event.timestamp} — {event.hostname} ({event.ipAddress}) transitioned from{" "}
+                    {event.previousStatus} to {event.status}
+                  </strong>
+                </div>
+                <span className={`status-tag ${event.status.toLowerCase()}`}>{event.status}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No device status transitions have been detected yet.</p>
+        )}
       </section>
 
       <section className="panel-card alerts-panel">

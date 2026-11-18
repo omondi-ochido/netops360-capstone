@@ -1,8 +1,48 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { discoveredDevices } from "../data/discoveredDevices";
+import { backupDeviceConfig, fetchDevices } from "../services/deviceService";
 
 function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
-  const device = discoveredDevices.find((item) => item.id === deviceId) || selectedDevice;
+  const [liveDevice, setLiveDevice] = useState(null);
+  const [isLive, setIsLive] = useState(false);
+  const [backup, setBackup] = useState(null);
+  const [backupError, setBackupError] = useState("");
+  const [isBackingUp, setIsBackingUp] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const refreshDevice = async () => {
+      const result = await fetchDevices();
+      if (!isMounted) return;
+      const matchingDevice = result.devices.find((item) => item.id === deviceId)
+        || result.devices.find((item) => item.hostname === selectedDevice?.hostname);
+      if (matchingDevice) setLiveDevice(matchingDevice);
+      setIsLive(result.isLive);
+    };
+
+    void refreshDevice();
+    const intervalId = window.setInterval(refreshDevice, 15000);
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [deviceId, selectedDevice?.hostname]);
+
+  const device = liveDevice || selectedDevice || discoveredDevices.find((item) => item.id === deviceId);
+  const canBackup = device?.sshEnabled || device?.hostname === "main-rtr";
+
+  const handleBackup = async () => {
+    setIsBackingUp(true);
+    setBackupError("");
+    try {
+      const result = await backupDeviceConfig(device.id);
+      setBackup(result);
+    } catch (error) {
+      setBackupError(error.message);
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
 
   if (!device) {
     return (
@@ -21,7 +61,7 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
       <section className="page-header-row">
         <div>
           <h2>{device.hostname}</h2>
-          <p>{device.deviceType} • {device.ipAddress} • {device.site}</p>
+          <p>{device.deviceType} • {device.ipAddress} • {device.site} • {isLive ? "Live GNS3 telemetry" : "Fallback inventory"}</p>
         </div>
         <div className="header-button-group">
           <button type="button" className="secondary-button" onClick={onBack}>Back to inventory</button>
@@ -45,7 +85,7 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
             <div><label>Device Type</label><strong>{device.deviceType}</strong></div>
             <div><label>Operating System</label><strong>{device.os || "Not specified"}</strong></div>
             <div><label>Site</label><strong>{device.site}</strong></div>
-            <div><label>Discovery Method</label><strong>{device.discoveredMethod}</strong></div>
+            <div><label>Discovery Method</label><strong>{device.discoveredMethod || "GNS3 inventory"}</strong></div>
             <div><label>Last Checked</label><strong>{device.lastChecked}</strong></div>
           </div>
         </div>
@@ -61,11 +101,11 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
           <div className="metric-list">
             <div>
               <span>Latency</span>
-              <strong>{device.latencyMs} ms</strong>
+              <strong>{Number.isFinite(device.latencyMs) ? `${device.latencyMs} ms` : "N/A"}</strong>
             </div>
             <div>
               <span>Packet loss</span>
-              <strong>{device.packetLoss}%</strong>
+              <strong>{Number.isFinite(device.packetLoss) ? `${device.packetLoss}%` : "N/A"}</strong>
             </div>
             <div>
               <span>Status</span>
@@ -87,18 +127,27 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
           </div>
         </div>
 
-        {device.configurationPending ? (
+        <div className="backup-row">
+          <div className="backup-meta">
+            <strong>Configuration backup</strong>
+            <span>{backup ? `Retrieved ${new Date(backup.backedUpAt).toLocaleString()}` : "No backup retrieved"}</span>
+          </div>
+          {canBackup && (
+            <button type="button" className="primary-button" onClick={handleBackup} disabled={isBackingUp}>
+              {isBackingUp ? "Retrieving..." : "Pull Live Config Backup (Netmiko)"}
+            </button>
+          )}
+        </div>
+        {device.configurationPending && !canBackup && (
           <p className="configuration-pending">Configuration pending console boot</p>
-        ) : (
-          <div className="backup-row">
-            <div className="backup-meta">
-              <strong>Last backup</strong>
-              <span>Not yet retrieved</span>
-            </div>
-            <div className="header-button-group">
-              <button type="button" className="secondary-button">Retrieve Config</button>
-              <button type="button" className="primary-button">Download Backup</button>
-            </div>
+        )}
+        {backupError && <p className="configuration-pending" role="alert">{backupError}</p>}
+        {backup && (
+          <div className="config-backup-output">
+            <h4>VyOS running configuration</h4>
+            <pre>{backup.config}</pre>
+            <h4>Interface status</h4>
+            <pre>{backup.interfaces}</pre>
           </div>
         )}
       </section>
