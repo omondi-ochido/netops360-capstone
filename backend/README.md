@@ -37,7 +37,7 @@ python run.py               # http://localhost:5050
 | Variable | Required | Notes |
 |---|---|---|
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | yes | server-side only |
-| `API_KEY` | strongly advised | clients send `X-API-Key`. Empty = auth disabled (dev only, logged as a warning) |
+| `API_KEY` | production-required | clients send `X-API-Key`; empty disables auth in development only (logged warning). Do not put this shared key in a public browser bundle. |
 | `NETOPS_SSH_USERNAME`, `NETOPS_SSH_PASSWORD` | for backups | never hardcoded or logged |
 | `N8N_WEBHOOK_URL`, `N8N_WEBHOOK_SECRET` | for automation | empty URL = automation off, no log noise |
 | `CORS_ALLOWED_ORIGINS` | no | comma-separated; default `http://localhost:5173`; `*` is rejected |
@@ -128,9 +128,9 @@ pytest -m integration     # needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (othe
   UUIDs/IPs validated; no SQL is built from input (query builder + RPC with bound parameters).
 * Errors returned to clients are generic; details go to the server log, which never contains secrets.
 * **Authentication gap:** there is no user authentication. `API_KEY` is a single shared secret - an interim
-  measure. The frontend must send `X-API-Key` for protected calls, and a key shipped in a browser bundle is
-  visible to every user. Before exposing this beyond a trusted lab, put the API behind real auth (for
-  example Supabase Auth JWT verification, or a reverse proxy) and keep read access to backups restricted.
+  measure. Production startup requires it. A key shipped in a browser bundle is visible to every user;
+  before public deployment, put the API behind real auth (for example Supabase Auth JWT verification or
+  an authenticated reverse proxy). Backup content reads remain key protected and are audited.
 * `GET /api/devices`, `/api/monitoring/*`, `/api/rules`, `/api/incidents` and `/api/health` are intentionally
   open reads so the existing dashboard keeps working.
 

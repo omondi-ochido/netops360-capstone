@@ -34,10 +34,20 @@ def get_incident(incident_id):
 @bp.post("/<incident_id>/acknowledge")
 @require_api_key
 def acknowledge(incident_id):
-    return ok(get_container().incidents.acknowledge(incident_id))
+    c = get_container()
+    before = c.incidents.get(incident_id)
+    incident = c.incidents.acknowledge(incident_id)
+    if before.get("status") == "open" and incident.get("status") == "acknowledged":
+        c.audit.record("acknowledged", "incident", row=incident, before=before)
+    return ok(incident)
 
 
 @bp.post("/<incident_id>/resolve")
 @require_api_key
 def resolve(incident_id):
-    return ok(get_container().incidents.resolve(incident_id))
+    c = get_container()
+    before = c.incidents.get(incident_id)
+    incident = c.incidents.resolve(incident_id)
+    if before.get("status") in ("open", "acknowledged") and incident.get("status") == "resolved":
+        c.audit.record("resolved", "incident", row=incident, before=before)
+    return ok(incident)

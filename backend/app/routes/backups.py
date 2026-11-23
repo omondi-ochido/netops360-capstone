@@ -24,4 +24,7 @@ def list_backups():
 @require_api_key
 def get_backup(backup_id):
     """Returns the full configuration text - protected by the API key."""
-    return ok(get_container().backups.get(backup_id))
+    c = get_container()
+    backup = c.backups.get(backup_id)
+    c.audit.record("sensitive_contents_read", "backup", row=backup)
+    return ok(backup)

@@ -6,13 +6,16 @@ Supabase PostgreSQL schema for NetOps360: six tables, two atomic incident functi
 
 | File | Purpose |
 |---|---|
-| `schema.sql` | Tables, constraints, indexes, triggers, `open_incident()` / `resolve_incident()` functions, RLS. Repeatable. |
+| `schema.sql` | Initial six-table schema, constraints, indexes, triggers, incident RPCs and RLS. Bootstrap for new installs. |
+| `migrations/202611230001_audit_logs.sql` | Adds migration version tracking and safe audit records without changing existing records. |
 | `seed.sql` | 9 Main Site devices and 3 default rules. Idempotent (`ON CONFLICT DO NOTHING`). |
 
 ## Supabase setup
 
 1. Create a project at <https://supabase.com>.
-2. Open **SQL Editor** and run `schema.sql`, then `seed.sql` (both can be re-run safely).
+2. For a new project, open **SQL Editor** and run `schema.sql`, then each numbered file under
+   `migrations/` in filename order, then `seed.sql`. For an existing project, inspect the actual
+   schema and run only migrations whose version is absent from `schema_migrations`.
 3. **Project Settings -> API**: copy the **Project URL** and the **service_role** key into `backend/.env`
    (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`).
 4. The `service_role` key bypasses RLS. It must live only in the backend `.env`. **Never** send it to the
@@ -20,6 +23,17 @@ Supabase PostgreSQL schema for NetOps360: six tables, two atomic incident functi
 
 Local alternative: any PostgreSQL 14+ works for the schema (`psql -f schema.sql -f seed.sql`). The RLS/role
 grants block only runs when the Supabase roles (`anon`, `service_role`) exist.
+
+## Migration process
+
+`schema.sql` is the initial bootstrap, not an upgrade mechanism. Add every future additive migration
+as an ordered SQL file and record its version in `schema_migrations` in the same transaction as the
+change. Review the target database before applying: the project may already contain schema changes
+not represented here. Keep a database backup and apply migrations through the deployment operator's
+approved SQL path. Verify the version row and affected objects after applying. The audit migration is
+transactional and additive; its rollback drops only `audit_logs` and removes its own version row.
+Do not remove `schema_migrations` while other versions are recorded. No live Supabase migration was
+run as part of local development; credentials and the Supabase CLI were unavailable.
 
 ## Tables
 
@@ -53,6 +67,9 @@ The three GNS3 Ethernet switches have no IP stack, so they are seeded `monitorin
 
 RLS is **enabled on every table with no policies**, so the public `anon` key can read and write nothing.
 Only the backend (service-role key) has access. The RPC functions are revoked from `anon`/`authenticated`.
+`audit_logs` and `schema_migrations` are also RLS enabled with no public policies. Only `service_role`
+has the table privileges required by backend audit inserts. The audit actor is nullable until real
+authenticated identities are introduced; request correlation IDs are captured separately.
 Configuration backups contain sensitive device config - treat the database and key accordingly.
 
 ## Retention (not automated)

@@ -1,103 +1,23 @@
-import React from 'react';
-import { useState } from "react";
-import { discoveredDevices } from "../data/discoveredDevices";
-
-const workflowSeed = [
-  { id: 1, name: "Device Down Alert", trigger: "Webhook: device-down", deviceId: "branch-rtr", status: "Healthy" },
-  { id: 2, name: "Device Recovery", trigger: "Webhook: device-up", deviceId: "SW1", status: "Healthy" },
-  { id: 3, name: "Latency Escalation", trigger: "Webhook: latency-threshold", deviceId: "main-rtr", status: "Paused" },
-];
-
-const activitySeed = [
-  { time: "07:42 UTC", workflow: "Device Down Alert", deviceId: "branch-rtr", result: "Triggered successfully" },
-  { time: "08:10 UTC", workflow: "Device Recovery", deviceId: "SW1", result: "Recovery check completed" },
-  { time: "09:03 UTC", workflow: "Latency Escalation", deviceId: "main-rtr", result: "Escalated to NOC queue" },
-];
+import React, { useCallback, useEffect, useState } from "react";
+import { fetchDevices } from "../services/deviceService";
+import { fetchAutomationLogs, retryAutomation } from "../services/operationsService";
 
 function AutomationManagement() {
-  const [workflows, setWorkflows] = useState(workflowSeed);
-
-  const triggerWorkflow = (id) => {
-    setWorkflows((current) => current.map((workflow) => (
-      workflow.id === id ? { ...workflow, status: "Executed" } : workflow
-    )));
-  };
-
-  const updateWorkflowDevice = (id, deviceId) => {
-    setWorkflows((current) => current.map((workflow) => (
-      workflow.id === id ? { ...workflow, deviceId } : workflow
-    )));
-  };
-
-  return (
-    <div className="page-stack">
-      <section className="page-header-row">
-        <div>
-          <h2>Automation Management</h2>
-          <p>Review workflow health and trigger operational automations on demand.</p>
-        </div>
-      </section>
-
-      <section className="panel-card">
-        <div className="automation-list">
-          {workflows.map((workflow) => (
-            <div key={workflow.id} className="automation-row">
-              <div>
-                <strong>{workflow.name}</strong>
-                <small>{workflow.trigger}</small>
-              </div>
-              <div className="automation-actions">
-                <select
-                  className="automation-device-select"
-                  value={workflow.deviceId}
-                  onChange={(event) => updateWorkflowDevice(workflow.id, event.target.value)}
-                  aria-label={`Device for ${workflow.name}`}
-                >
-                  {discoveredDevices.map((device) => (
-                    <option key={device.id} value={device.id}>{device.hostname}</option>
-                  ))}
-                </select>
-                <span className={`status-tag ${workflow.status.toLowerCase()}`}>{workflow.status}</span>
-                <button type="button" className="primary-button small-button" onClick={() => triggerWorkflow(workflow.id)}>
-                  Test Trigger
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel-card">
-        <div className="panel-header-row">
-          <div>
-            <span className="eyebrow-text">Log</span>
-            <h3>Automated activity</h3>
-          </div>
-        </div>
-
-        <table className="data-table log-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Workflow</th>
-              <th>Device</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody>
-            {activitySeed.map((item, index) => (
-              <tr key={`${item.workflow}-${index}`}>
-                <td>{item.time}</td>
-                <td>{item.workflow}</td>
-                <td>{discoveredDevices.find((device) => device.id === item.deviceId)?.hostname || item.deviceId}</td>
-                <td>{item.result}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-    </div>
-  );
+  const [logs, setLogs] = useState([]); const [devices, setDevices] = useState([]);
+  const [error, setError] = useState(""); const [busyId, setBusyId] = useState(""); const [loading, setLoading] = useState(true);
+  const refresh = useCallback(async () => { setLoading(true); setError(""); try {
+    const [rows, deviceResult] = await Promise.all([fetchAutomationLogs({ limit: 200 }), fetchDevices()]);
+    setLogs(rows); setDevices(deviceResult.devices);
+  } catch (err) { setError(err.message); } finally { setLoading(false); } }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  const retry = async (log) => { setBusyId(log.id); setError(""); try { await retryAutomation(log.id); await refresh(); } catch (err) { setError(err.message); } finally { setBusyId(""); } };
+  return <div className="page-stack">
+    <section className="page-header-row"><div><h2>Automation Management</h2><p>Delivery state comes from persisted webhook execution records.</p></div><button type="button" className="secondary-button" onClick={refresh}>Refresh</button></section>
+    {error && <p className="configuration-pending" role="alert">{error} <button type="button" className="secondary-button small-button" onClick={refresh}>Retry loading</button></p>}
+    <section className="panel-card"><div className="panel-header-row"><div><span className="eyebrow-text">n8n delivery history</span><h3>Automation executions</h3></div></div><div className="table-scroll"><table className="data-table log-table"><thead><tr><th>Created</th><th>Workflow</th><th>Trigger</th><th>Device</th><th>Status</th><th>Retries</th><th>Result</th><th>Action</th></tr></thead><tbody>
+      {logs.map((log) => <tr key={log.id}><td>{log.created_at ? new Date(log.created_at).toLocaleString() : "—"}</td><td>{log.workflow_name}</td><td>{log.trigger_type}</td><td>{devices.find((d) => d.id === log.device_id)?.hostname || log.device_id || "—"}</td><td><span className={`status-tag ${log.status}`}>{log.status}</span></td><td>{log.retry_count}</td><td>{log.error_message || log.execution_id || (log.status === "success" ? "Delivered" : "Awaiting result")}</td><td>{["failed", "pending"].includes(log.status) && <button type="button" className="primary-button small-button" disabled={busyId === log.id} onClick={() => retry(log)}>{busyId === log.id ? "Retrying..." : "Retry"}</button>}</td></tr>)}
+      {loading && !logs.length && <tr><td colSpan="8">Loading automation logs...</td></tr>}{!loading && !error && !logs.length && <tr><td colSpan="8">No automation executions recorded. Webhook delivery requires N8N_WEBHOOK_URL.</td></tr>}
+    </tbody></table></div></section>
+  </div>;
 }
-
 export default AutomationManagement;

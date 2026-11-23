@@ -1,41 +1,58 @@
-import { discoveredDevices } from "../data/discoveredDevices";
+import { apiRequest, listData, resourceData, queryString } from "./api.js";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:5050").replace(/\/+$/, "");
+export function mapDevice(row) {
+  const type = row.device_type || row.type || row.deviceType || "other";
+  return {
+    ...row,
+    id: row.id,
+    hostname: row.hostname || row.name,
+    ipAddress: row.ip_address || row.ipAddress || row.ip,
+    deviceType: type.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    os: row.operating_system || row.os || "",
+    site: row.site || "",
+    status: row.current_status || row.status || "Unknown",
+    latencyMs: row.last_latency_ms == null ? null : Number(row.last_latency_ms),
+    packetLoss: row.last_packet_loss == null ? null : Number(row.last_packet_loss),
+    lastChecked: row.last_checked_at || row.last_checked || "Never",
+    sshEnabled: Boolean(row.ssh_enabled ?? row.sshEnabled),
+    monitoringEnabled: Boolean(row.monitoring_enabled ?? row.monitoringEnabled),
+    monitoringMethod: row.monitoring_method || row.monitoringMethod,
+    monitorIntervalSeconds: row.monitor_interval_seconds || row.monitorIntervalSeconds,
+  };
+}
 
-export async function fetchDevices() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/devices`);
-    if (!response.ok) {
-      throw new Error(`Device request failed (${response.status})`);
-    }
+export async function fetchDevices({ limit = 200, offset = 0 } = {}) {
+  const payload = await apiRequest(`/api/devices${queryString({ limit, offset })}`);
+  return { devices: listData(payload).map(mapDevice), pagination: payload.pagination, isLive: true };
+}
 
-    const payload = await response.json();
-    if (!Array.isArray(payload.devices)) {
-      throw new Error("Device response did not contain a device list");
-    }
+export async function getDevice(deviceId) {
+  const payload = await apiRequest(`/api/devices/${encodeURIComponent(deviceId)}`);
+  return mapDevice(resourceData(payload));
+}
 
-    return {
-      devices: payload.devices.map((device) => ({
-        ...device,
-        discoveredMethod: device.discoveredMethod || "GNS3 Live API",
-        lastChecked: device.lastChecked || payload.timestamp || "Just now",
-      })),
-      isLive: true,
-    };
-  } catch {
-    return { devices: discoveredDevices, isLive: false };
-  }
+export async function createDevice(device) {
+  const payload = await apiRequest("/api/devices", { method: "POST", body: JSON.stringify(device) });
+  return mapDevice(resourceData(payload));
+}
+
+export async function updateDevice(deviceId, changes) {
+  const payload = await apiRequest(`/api/devices/${encodeURIComponent(deviceId)}`, {
+    method: "PATCH", body: JSON.stringify(changes),
+  });
+  return mapDevice(resourceData(payload));
+}
+
+export async function deactivateDevice(deviceId) {
+  return apiRequest(`/api/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+}
+
+export async function fetchDeviceHistory(deviceId, params = {}) {
+  const payload = await apiRequest(`/api/monitoring/history${queryString({ ...params, device_id: deviceId })}`);
+  return listData(payload);
 }
 
 export async function backupDeviceConfig(deviceId) {
-  const response = await fetch(`${API_BASE_URL}/api/devices/${encodeURIComponent(deviceId)}/backup`, {
-    method: "POST",
-  });
-  const payload = await response.json();
-
-  if (!response.ok) {
-    throw new Error(payload.error || `Configuration backup failed (${response.status})`);
-  }
-
-  return payload;
+  const payload = await apiRequest(`/api/devices/${encodeURIComponent(deviceId)}/backup`, { method: "POST" });
+  return resourceData(payload);
 }

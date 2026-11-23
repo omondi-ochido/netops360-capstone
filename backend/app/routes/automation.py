@@ -30,4 +30,7 @@ def logs():
 @bp.post("/retry/<log_id>")
 @require_api_key
 def retry(log_id):
-    return ok(get_container().automation.retry(log_id), 202)
+    c = get_container()
+    log = c.automation.retry(log_id)
+    c.audit.record("retry_requested", "automation", row=log)
+    return ok(log, 202)

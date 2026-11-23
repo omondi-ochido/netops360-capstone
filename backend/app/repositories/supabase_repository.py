@@ -61,6 +61,9 @@ class SupabaseRepository:
     def _t(self, name):
         return self.client.table(name)
 
+    def insert_audit_log(self, data):
+        return _first(_execute(self._t("audit_logs").insert(data)))
+
     # ------------------------------------------------------------------ health
     def ping(self):
         _execute(self._t("rules").select("id").limit(1))

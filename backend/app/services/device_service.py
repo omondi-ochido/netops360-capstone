@@ -29,6 +29,17 @@ def legacy_view(device):
         "packet_loss": device["last_packet_loss"],
         "packetLoss": device["last_packet_loss"],
         "last_checked": device["last_checked_at"],
+        "deviceType": device["device_type"].replace("_", " ").title(),
+        "ipAddress": device["ip_address"],
+        "os": device.get("operating_system"),
+        "site": device.get("site"),
+        "status": device["current_status"],
+        "latencyMs": float(device["last_latency_ms"]) if device.get("last_latency_ms") is not None else None,
+        "lastChecked": device.get("last_checked_at"),
+        "sshEnabled": device.get("ssh_enabled", False),
+        "monitoringEnabled": device.get("monitoring_enabled", False),
+        "monitoringMethod": device.get("monitoring_method"),
+        "monitorIntervalSeconds": device.get("monitor_interval_seconds"),
     }
 
 

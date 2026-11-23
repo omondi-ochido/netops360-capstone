@@ -115,6 +115,8 @@ class Config:
                 problems.append("SUPABASE_URL is required")
             if not self.supabase_service_role_key:
                 problems.append("SUPABASE_SERVICE_ROLE_KEY is required")
+        if self.env.lower() in ("production", "prod") and not self.api_key:
+            problems.append("API_KEY is required in production")
         if not 1 <= self.ping_count <= 10:
             problems.append("PING_COUNT must be between 1 and 10")
         if not 1 <= self.ping_timeout_seconds <= 30:

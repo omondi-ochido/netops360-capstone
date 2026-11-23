@@ -6,6 +6,7 @@ from flask import current_app
 from flask_cors import CORS
 
 from app.services.automation_service import AutomationService
+from app.services.audit_service import AuditService
 from app.services.backup_service import BackupService
 from app.services.device_service import DeviceService
 from app.services.incident_service import IncidentService
@@ -24,6 +25,7 @@ class Container:
     def __init__(self, config, repo):
         self.config = config
         self.repo = repo
+        self.audit = AuditService(repo)
         self.automation = AutomationService(repo, config)
         self.incidents = IncidentService(repo, automation=self.automation)
         self.rules = RuleEngine(repo, incident_service=self.incidents)

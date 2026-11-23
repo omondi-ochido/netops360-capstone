@@ -1,8 +1,10 @@
 """NetOps360 Flask application factory."""
 import logging
 import os
+import uuid
 
 from flask import Flask
+from flask import g, request
 from werkzeug.exceptions import HTTPException
 
 from app.config import Config
@@ -38,8 +40,19 @@ def create_app(config_overrides=None, repository=None):
 
     app = Flask(__name__)
     cors.init_app(app, resources={r"/api/*": {"origins": config.cors_origins}},
-                  allow_headers=["Content-Type", "X-API-Key"],
+                  allow_headers=["Content-Type", "X-API-Key", "X-Request-ID"],
+                  expose_headers=["X-Request-ID"],
                   methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"])
+
+    @app.before_request
+    def assign_request_id():
+        supplied = request.headers.get("X-Request-ID", "")
+        g.request_id = supplied[:128] if supplied and all(32 <= ord(ch) < 127 for ch in supplied[:128]) else str(uuid.uuid4())
+
+    @app.after_request
+    def return_request_id(response):
+        response.headers["X-Request-ID"] = g.request_id
+        return response
 
     container = Container(config, repository)
     app.extensions["netops"] = container

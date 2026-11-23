@@ -40,11 +40,18 @@ class InMemoryRepository:
         self.incidents = {}
         self.backups = {}
         self.automation_logs = {}
+        self.audit_logs = []
 
     # ------------------------------------------------------------------ health
     @guarded
     def ping(self):
         return True
+
+    @guarded
+    def insert_audit_log(self, data):
+        row = {"id": str(uuid.uuid4()), "occurred_at": now_iso(), **data}
+        self.audit_logs.append(row)
+        return copy.deepcopy(row)
 
     # ----------------------------------------------------------------- devices
     @guarded

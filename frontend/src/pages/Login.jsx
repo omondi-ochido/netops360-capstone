@@ -18,7 +18,7 @@ function Login({ onLogin }) {
   };
 
   const handleOAuthPlaceholder = (provider) => {
-    setOauthMessage(`${provider} sign-in is ready to connect.`);
+    setOauthMessage(`${provider} sign-in is not configured.`);
   };
 
   return (
@@ -29,6 +29,7 @@ function Login({ onLogin }) {
         </div>
 
         <form className="login-form" onSubmit={handleSubmit}>
+          <p role="note">Demo access only. This screen does not authenticate a user.</p>
           <label>
             <span>Email or username</span>
             <input
