@@ -25,9 +25,9 @@ export default function Login() {
       <p>Sign in with the account invited by your NetOps360 administrator.</p>
       <label><span>Email</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
       <label><span>Password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+      <Link to="/forgot-password">Forgot password?</Link>
       {(formError || error) && <p role="alert">{formError || error}</p>}
       <button type="submit" className="primary-button full-width" disabled={loading || Boolean(providerLoading)}>Sign in</button>
-      <Link to="/forgot-password">Forgot password?</Link>
     </form>
     <div className="oauth-divider" aria-label="Or sign in with a connected provider"><span /><span className="oauth-divider-label">OR CONTINUE WITH</span><span /></div>
     <div className="oauth-buttons">
