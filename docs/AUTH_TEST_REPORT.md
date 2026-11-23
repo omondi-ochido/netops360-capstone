@@ -7,7 +7,7 @@ Run on 2026-11-23 from the repository worktree.
 | Check | Result |
 |---|---|
 | `backend/.venv/bin/pytest -q backend/tests` | Passed: 131 passed, 5 skipped |
-| `cd frontend && npm test` | Passed: 2 test suites; exercises bearer-token forwarding, refresh/retry behavior, error handling, and email recovery OTP type/order |
+| `cd frontend && npm test` | Passed: 2 test suites; exercises bearer-token forwarding, refresh/retry behavior, error handling, email recovery OTP type/order, and Google/GitHub/Microsoft OAuth provider routing |
 | `cd frontend && npm run build` | Passed: Vite production build completed |
 | `git diff --check` | Passed: no whitespace errors |
 
@@ -20,11 +20,13 @@ The five skipped backend tests are integration checks that require a configured 
 - `/api/auth/me` returns the verified user's profile and permissions; logout revokes that session.
 - Frontend API calls attach the Supabase access token and retry once after token refresh.
 - Recovery request targets `/reset-password`; code verification uses Supabase `type: "recovery"`; password update occurs after code verification in the page flow.
+- Social sign-in dispatches Google, GitHub, and Azure (Microsoft) through Supabase OAuth and returns to the app origin.
 
 ## Not verified locally
 
 - Applying either migration to a live Supabase project, including SQL execution under its exact Postgres version and extensions.
 - Supabase Auth dashboard settings, SMTP email delivery, invite links, recovery template rendering, and allowed redirect URLs.
+- Live OAuth provider credentials, callback allowlists, and each provider's consent/sign-in behavior.
 - End-to-end password reset with a real mailbox and Supabase project.
 
 Configure and validate those items in a non-production Supabase project by following [AUTH_SETUP.md](AUTH_SETUP.md) before deployment.

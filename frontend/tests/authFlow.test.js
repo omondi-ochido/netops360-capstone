@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sendRecoveryCode, updatePassword, verifyRecoveryCode } from "../src/services/authService.js";
+import { sendRecoveryCode, signInWithProvider, updatePassword, verifyRecoveryCode } from "../src/services/authService.js";
 import { setSupabaseClientForTests } from "../src/services/supabaseClient.js";
 
 test("recovery sends email, verifies the recovery OTP type, and updates the password", async () => {
@@ -23,4 +23,21 @@ test("recovery sends email, verifies the recovery OTP type, and updates the pass
   assert.equal(calls[0][2].redirectTo, "https://netops.example/reset-password");
   assert.deepEqual(calls[1][1], { email: "User@example.com", token: "123456", type: "recovery" });
   assert.deepEqual(calls[2][1], { password: "a-new-secure-password" });
+});
+
+test("social login preserves the provider and redirects back to the app", async () => {
+  const calls = [];
+  setSupabaseClientForTests({ auth: { signInWithOAuth: async (args) => { calls.push(args); return { error: null }; } } });
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { origin: "https://netops.example" } };
+  try {
+    await signInWithProvider("google");
+    await signInWithProvider("github");
+    await signInWithProvider("azure");
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
+  }
+  assert.deepEqual(calls.map((call) => call.provider), ["google", "github", "azure"]);
+  assert.equal(calls[0].options.redirectTo, "https://netops.example/");
+  assert.equal(calls[2].options.scopes, "email");
 });

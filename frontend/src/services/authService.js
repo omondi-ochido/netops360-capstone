@@ -7,6 +7,15 @@ export async function signIn(email, password) {
   return data.session;
 }
 
+export async function signInWithProvider(provider) {
+  const scopes = provider === "azure" ? "email" : undefined;
+  const { error } = await getSupabaseClient().auth.signInWithOAuth({
+    provider,
+    options: { redirectTo: `${window.location.origin}/`, ...(scopes ? { scopes } : {}) },
+  });
+  if (error) throw error;
+}
+
 export async function sendRecoveryCode(email) {
   const redirectTo = `${window.location.origin}/reset-password`;
   const { error } = await getSupabaseClient().auth.resetPasswordForEmail(email.trim(), { redirectTo });

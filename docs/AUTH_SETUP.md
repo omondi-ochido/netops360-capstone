@@ -5,10 +5,14 @@ NetOps360 uses Supabase Auth for credentials and email recovery, and verifies ac
 ## Configure Supabase
 
 1. In Supabase Auth, allow email and password sign-in, set the minimum password length to 12 characters, and disable public sign-ups. Configure a working SMTP sender before inviting users or sending recovery codes.
-2. In the Auth URL configuration, add the deployed frontend origin plus `http://localhost:5173/accept-invite` and `http://localhost:5173/reset-password` to the allowed redirect URLs.
+2. In the Auth URL configuration, add the deployed frontend origin plus `http://localhost:5173/`, `http://localhost:5173/accept-invite`, and `http://localhost:5173/reset-password` to the allowed redirect URLs.
 3. In the password recovery email template, show the one-time code using `{{ .Token }}`. The user enters that code in NetOps360. Do not replace the code flow with a password reset link. The invitation email should direct the invited user to `/accept-invite`.
 4. Use an asymmetric JWT signing key (ES256 or RS256) where the project supports it. The backend reads public keys from the project JWKS endpoint. Existing HS256 keys are checked online with Supabase Auth; the signing secret is never stored in this application.
 5. Keep the Supabase service-role key only in the backend secret store. The frontend uses the project URL and publishable key; publishable keys do not authorize application data access because public roles have no table grants or RLS policies.
+
+### Social sign-in providers
+
+The login page keeps Google, GitHub, and Microsoft sign-in. Enable and configure each provider in Supabase Auth before offering it; Microsoft uses the `azure` provider and requests the `email` scope. Register Supabase's `/auth/v1/callback` URL with each OAuth provider and allow the frontend origin above as the app redirect. Supabase supports these redirects through `signInWithOAuth` and automatically links identities that have the same email address. Only provisioned accounts with an active NetOps360 profile can pass the backend authorization check. See [Supabase social sign-in](https://supabase.com/docs/guides/auth/social-sign-in), [Azure provider setup](https://supabase.com/docs/guides/auth/social-sign-in/auth-azure), and [identity linking](https://supabase.com/docs/guides/auth/auth-identity-linking).
 
 ## Environment
 

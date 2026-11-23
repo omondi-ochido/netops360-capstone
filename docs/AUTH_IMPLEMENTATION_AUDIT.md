@@ -33,7 +33,7 @@ This is the baseline audit for the state before the auth implementation. Current
 
 ## Implementation status
 
-Implemented in this repository: invite-only Supabase Auth login and session restoration; email OTP password recovery followed by code verification and new-password confirmation; invite acceptance; Flask JWT verification and permission decorators; active account/session checks; RBAC migration and repositories; user invite/profile/status/role endpoints and UI; and auth setup documentation. The package and API tests are listed in `AUTH_TEST_REPORT.md`.
+Implemented in this repository: invite-only Supabase Auth login and session restoration; Google, GitHub, and Microsoft OAuth entry points; email OTP password recovery followed by code verification and new-password confirmation; invite acceptance; Flask JWT verification and permission decorators; active account/session checks; RBAC migration and repositories; user invite/profile/status/role endpoints and UI; and auth setup documentation. The package and API tests are listed in `AUTH_TEST_REPORT.md`.
 
 Deployment-specific SMTP settings, Supabase redirect allowlists, first-admin bootstrap, and live database migration remain operator tasks documented in `AUTH_SETUP.md`. No live Supabase project was available in this implementation session.
 
