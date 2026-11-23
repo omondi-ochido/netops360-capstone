@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.119.2",
     "@vitejs/plugin-react": "^4.3.4",
     "lucide-react": "^1.72.0",
     "react": "^18.3.1",

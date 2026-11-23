@@ -2,7 +2,7 @@ from flask import Blueprint, request
 
 from app.extensions import get_container
 from app.models.constants import AUTOMATION_STATUSES
-from app.utils.auth import require_api_key
+from app.utils.auth import require_permission
 from app.utils.responses import ok, ok_list
 from app.utils.validators import parse_pagination, validate_choice, validate_uuid
 
@@ -10,7 +10,7 @@ bp = Blueprint("automation", __name__, url_prefix="/api/automation")
 
 
 @bp.get("/logs")
-@require_api_key
+@require_permission("automation.read")
 def logs():
     limit, offset = parse_pagination(request.args)
     status = request.args.get("status")
@@ -28,7 +28,7 @@ def logs():
 
 
 @bp.post("/retry/<log_id>")
-@require_api_key
+@require_permission("automation.execute")
 def retry(log_id):
     c = get_container()
     log = c.automation.retry(log_id)

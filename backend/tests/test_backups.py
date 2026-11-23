@@ -144,12 +144,11 @@ def test_backup_history_and_retrieval(client, dev, ssh):
     assert client.get("/api/backups/5b3b5b3b-5b3b-4b3b-8b3b-5b3b5b3b5b3b").status_code == 404
 
 
-def test_backup_endpoints_require_api_key_when_configured(make_app, container):
-    client = make_app(api_key="k").test_client()
+def test_backup_endpoints_require_bearer_auth(make_app, container):
+    client = make_app(auth_test_bypass=False).test_client()
     assert client.get("/api/backups").status_code == 401
     assert client.get("/api/backups/5b3b5b3b-5b3b-4b3b-8b3b-5b3b5b3b5b3b").status_code == 401
     assert client.post("/api/devices/main-rtr/backup").status_code == 401
-    assert client.get("/api/backups", headers={"X-API-Key": "k"}).status_code == 200
 
 
 def test_scheduled_backups_only_touch_ssh_devices(container, repo, ssh):

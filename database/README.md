@@ -1,6 +1,6 @@
 # NetOps360 Database
 
-Supabase PostgreSQL schema for NetOps360: six tables, two atomic incident functions, RLS locked down to the backend.
+Supabase PostgreSQL schema for NetOps360: six core operational tables, Auth/RBAC tables, two atomic incident functions, and RLS locked down to the backend.
 
 ## Files
 
@@ -8,6 +8,7 @@ Supabase PostgreSQL schema for NetOps360: six tables, two atomic incident functi
 |---|---|
 | `schema.sql` | Initial six-table schema, constraints, indexes, triggers, incident RPCs and RLS. Bootstrap for new installs. |
 | `migrations/202611230001_audit_logs.sql` | Adds migration version tracking and safe audit records without changing existing records. |
+| `migrations/202611230002_auth_rbac.sql` | Adds Auth profiles, seeded RBAC, revoked sessions, and last-Super-Admin protections. |
 | `seed.sql` | 9 Main Site devices and 3 default rules. Idempotent (`ON CONFLICT DO NOTHING`). |
 
 ## Supabase setup
@@ -31,7 +32,8 @@ as an ordered SQL file and record its version in `schema_migrations` in the same
 change. Review the target database before applying: the project may already contain schema changes
 not represented here. Keep a database backup and apply migrations through the deployment operator's
 approved SQL path. Verify the version row and affected objects after applying. The audit migration is
-transactional and additive; its rollback drops only `audit_logs` and removes its own version row.
+transactional and additive; the Auth/RBAC migration is also additive. Its rollback requires preserving
+user role assignments and audit identity references, as described at the end of its SQL file.
 Do not remove `schema_migrations` while other versions are recorded. No live Supabase migration was
 run as part of local development; credentials and the Supabase CLI were unavailable.
 

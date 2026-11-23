@@ -7,11 +7,14 @@ def ok(data, status=200):
     return jsonify({"data": data, "timestamp": now_iso()}), status
 
 
-def ok_list(items, limit, offset):
+def ok_list(items, limit, offset, total=None):
+    pagination = {"limit": limit, "offset": offset, "count": len(items)}
+    if total is not None:
+        pagination["total"] = total
     return jsonify(
         {
             "data": items,
-            "pagination": {"limit": limit, "offset": offset, "count": len(items)},
+            "pagination": pagination,
             "timestamp": now_iso(),
         }
     )

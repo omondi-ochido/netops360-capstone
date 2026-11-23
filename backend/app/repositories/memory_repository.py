@@ -10,6 +10,7 @@ import uuid
 from functools import wraps
 
 from app.models.constants import ACTIVE_INCIDENT_STATUSES
+from app.models.rbac import PERMISSION_KEYS, ROLE_PERMISSIONS
 from app.utils.exceptions import ConflictError, DatabaseError, ValidationError
 from app.utils.timeutil import now_iso, parse_ts, utcnow
 
@@ -41,6 +42,15 @@ class InMemoryRepository:
         self.backups = {}
         self.automation_logs = {}
         self.audit_logs = []
+        self.profiles = {}
+        self.roles = {str(uuid.uuid5(uuid.NAMESPACE_URL, f"netops360:role:{name}")):
+                      {"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"netops360:role:{name}")),
+                       "name": name, "description": ""} for name in ROLE_PERMISSIONS}
+        self.permissions = {key: {"permission_key": key, "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"netops360:permission:{key}")),
+                                  "description": key, "resource": key.split(".")[0], "action": key.split(".")[1]}
+                            for key in PERMISSION_KEYS}
+        self.user_roles = []
+        self.revoked_sessions = {}
 
     # ------------------------------------------------------------------ health
     @guarded
@@ -51,6 +61,139 @@ class InMemoryRepository:
     def insert_audit_log(self, data):
         row = {"id": str(uuid.uuid4()), "occurred_at": now_iso(), **data}
         self.audit_logs.append(row)
+        return copy.deepcopy(row)
+
+    # ---------------------------------------------------------- auth / RBAC
+    @guarded
+    def get_profile(self, user_id):
+        return copy.deepcopy(self.profiles.get(str(user_id)))
+
+    @guarded
+    def profile_exists_by_email(self, email):
+        return any(p["email"].lower() == str(email).lower() for p in self.profiles.values())
+
+    @guarded
+    def create_profile(self, data):
+        if any(p["email"].lower() == data["email"].lower() for p in self.profiles.values()):
+            raise ConflictError("A user with this email already exists.")
+        row = {"phone_number": None, "account_status": "active", "last_login_at": None,
+               "created_at": now_iso(), "updated_at": now_iso(), **data}
+        self.profiles[str(row["id"])] = row
+        return copy.deepcopy(row)
+
+    @guarded
+    def list_profiles(self, limit=50, offset=0, search=None, status=None):
+        rows = list(self.profiles.values())
+        if status:
+            rows = [p for p in rows if p["account_status"] == status]
+        if search:
+            term = search.lower()
+            rows = [p for p in rows if term in p["email"].lower() or term in p["full_name"].lower()]
+        rows.sort(key=lambda p: p["email"].lower())
+        total = len(rows)
+        return copy.deepcopy(_page(rows, limit, offset)), total
+
+    @guarded
+    def update_profile(self, user_id, data):
+        row = self.profiles.get(str(user_id))
+        if row is None:
+            return None
+        if "account_status" in data and data["account_status"] != "active" and row["account_status"] == "active":
+            roles = self.get_user_roles(str(user_id))
+            if "super_admin" in roles and self.count_active_super_admins() <= 1:
+                raise ConflictError("Cannot disable the last active Super Admin.")
+        row.update(data); row["updated_at"] = now_iso()
+        return copy.deepcopy(row)
+
+    @guarded
+    def list_roles(self):
+        return copy.deepcopy(list(self.roles.values()))
+
+    @guarded
+    def get_role(self, role_id):
+        return copy.deepcopy(self.roles.get(str(role_id)))
+
+    @guarded
+    def get_role_by_name(self, name):
+        return copy.deepcopy(next((r for r in self.roles.values() if r["name"] == name), None))
+
+    @guarded
+    def list_permissions(self):
+        return copy.deepcopy(list(self.permissions.values()))
+
+    @guarded
+    def list_user_role_rows(self, user_id):
+        result = []
+        for row in self.user_roles:
+            if row["user_id"] == str(user_id):
+                result.append({**copy.deepcopy(row), "role": copy.deepcopy(self.roles[row["role_id"]])})
+        return result
+
+    @guarded
+    def get_user_roles(self, user_id):
+        return [row["role"]["name"] for row in self.list_user_role_rows(user_id)]
+
+    @guarded
+    def get_user_permissions(self, user_id):
+        keys = set()
+        for name in self.get_user_roles(user_id):
+            if ROLE_PERMISSIONS[name] == "*":
+                return list(PERMISSION_KEYS)
+            keys.update(ROLE_PERMISSIONS[name])
+        return sorted(keys)
+
+    @guarded
+    def get_role_permissions(self, role_id):
+        role = self.roles.get(str(role_id))
+        if not role:
+            return []
+        keys = ROLE_PERMISSIONS[role["name"]]
+        return list(PERMISSION_KEYS) if keys == "*" else sorted(keys)
+
+    @guarded
+    def assign_user_role(self, user_id, role_id, assigned_by):
+        if any(r["user_id"] == str(user_id) and r["role_id"] == str(role_id) for r in self.user_roles):
+            raise ConflictError("This role is already assigned to the user.")
+        if str(user_id) not in self.profiles or str(role_id) not in self.roles:
+            raise ValidationError("User or role does not exist.")
+        row = {"id": str(uuid.uuid4()), "user_id": str(user_id), "role_id": str(role_id),
+               "assigned_by": str(assigned_by), "assigned_at": now_iso()}
+        self.user_roles.append(row)
+        return copy.deepcopy(row)
+
+    @guarded
+    def remove_user_role(self, user_id, role_id):
+        target = next((r for r in self.user_roles if r["user_id"] == str(user_id) and r["role_id"] == str(role_id)), None)
+        if not target:
+            return False
+        profile = self.profiles.get(str(user_id))
+        role = self.roles[str(role_id)]
+        if role["name"] == "super_admin" and profile and profile["account_status"] == "active" and self.count_active_super_admins() <= 1:
+            raise ConflictError("Cannot remove the last active Super Admin.")
+        self.user_roles.remove(target)
+        return True
+
+    @guarded
+    def count_active_super_admins(self):
+        role_id = next(r["id"] for r in self.roles.values() if r["name"] == "super_admin")
+        return sum(1 for row in self.user_roles if row["role_id"] == role_id
+                   and self.profiles.get(row["user_id"], {}).get("account_status") == "active")
+
+    @guarded
+    def list_user_audit_logs(self, user_id, limit=50, offset=0):
+        rows = [r for r in self.audit_logs if r.get("actor_user_id") == str(user_id)]
+        rows.sort(key=lambda r: r.get("occurred_at", ""), reverse=True)
+        return copy.deepcopy(_page(rows, limit, offset))
+
+    @guarded
+    def is_session_revoked(self, session_id):
+        return str(session_id) in self.revoked_sessions
+
+    @guarded
+    def revoke_session(self, session_id, user_id, expires_at):
+        row = {"session_id": str(session_id), "user_id": str(user_id),
+               "expires_at": expires_at, "revoked_at": now_iso()}
+        self.revoked_sessions[str(session_id)] = row
         return copy.deepcopy(row)
 
     # ----------------------------------------------------------------- devices

@@ -2,16 +2,19 @@
 
 ## Summary
 
-Connected the existing React modules to the existing Flask API and replaced production UI seed-state with persisted backend reads and writes. Kept the Flask service/repository architecture and the six core database tables. Added one additive database migration for version tracking and audit records. Existing in-memory backend tests and new browser-service contract checks pass.
+Connected the existing React modules to the Flask API and replaced production UI seed-state with persisted backend reads and writes. Added Supabase Auth, invite-only user management, database-backed RBAC, email-code password recovery, and a second additive database migration. Existing in-memory backend tests and browser-service checks pass.
 
 ## Files created
 
 - `docs/IMPLEMENTATION_AUDIT.md` — preliminary code/schema audit and change plan.
 - `docs/IMPLEMENTATION_REPORT.md` — this implementation and verification record.
+- `docs/AUTH_SETUP.md` / `docs/AUTH_TEST_REPORT.md` — Auth configuration and verification record.
+- `docs/AUTH_IMPLEMENTATION_AUDIT.md` — pre-implementation auth/RBAC gap audit.
 - `database/migrations/202611230001_audit_logs.sql` — version table and audit log migration.
+- `database/migrations/202611230002_auth_rbac.sql` — profiles, roles, permissions and session revocation schema.
 - `backend/app/services/audit_service.py` — safe metadata selection and audit persistence.
 - `backend/tests/test_audit.py` — audit, backup access, request ID, and production API-key tests.
-- `frontend/.env.example` — API URL and development-only browser key guidance.
+- `frontend/.env.example` — Supabase public client and API URL settings.
 - `frontend/src/services/api.js` — shared fetch, error, pagination, and response helpers.
 - `frontend/src/services/operationsService.js` — rules, incidents, monitoring, and automation API calls.
 - `frontend/tests/apiIntegration.test.js` — frontend request/response contract tests.
@@ -19,7 +22,7 @@ Connected the existing React modules to the existing Flask API and replaced prod
 ## Files modified
 
 - Root, backend, and database README files document setup, browser key exposure, and migration rollout.
-- Backend app/config/repository/routes and `device_service.py` add correlation IDs, API pagination compatibility, device field aliases, production key enforcement, and audit calls.
+- Backend app/config/repository/routes and `device_service.py` add correlation IDs, API pagination compatibility, device field aliases, JWT authentication, permission checks, and audit calls.
 - `backend/app/extensions.py` wires the audit service.
 - `frontend/package.json` adds the built-in Node test command.
 - Device inventory/details, dashboard, monitoring rules, incidents, automation, and login UI now use backend data and surface request failures. `frontend/src/services/deviceService.js` now has device CRUD, monitoring history, and backup methods.
@@ -48,12 +51,14 @@ Connected the existing React modules to the existing Flask API and replaced prod
 - Incident UI now uses stored status/severity and lifecycle endpoints. Dashboard alerts come from incidents and telemetry rows rather than inferred/fabricated alerts.
 - Automation UI shows persisted webhook delivery status, errors, execution IDs, and retries; the old local “Test Trigger” success state was removed.
 - API errors are rendered in the UI with retry controls. The backend returns request correlation IDs and includes them in audit rows.
-- Protected writes and sensitive backup reads require the configured key. Production startup now refuses to run without `API_KEY`.
+- All resource endpoints require Supabase bearer authentication and the appropriate database permission; `/api/health` remains public.
+- Forgot-password sends a one-time email code; the recovery screen verifies the code before requiring and saving a matching new password and confirmation.
+- User Management supports invite-only account creation, profile updates, role assignment bounded by the acting user's authority, account suspension, and audit history.
 
 ## Tests and verification
 
-- `backend/.venv/bin/pytest -q backend/tests`: **127 passed, 5 skipped**. The skipped tests require live Supabase configuration.
-- `frontend/npm test` (`node --test`): **3 frontend API contract checks passed**.
+- `backend/.venv/bin/pytest -q backend/tests`: **131 passed, 5 skipped**. The skipped tests require live Supabase configuration.
+- `cd frontend && npm test` (`node --test`): **2 test suites passed**, including API and recovery flow checks.
 - `frontend/npm run build`: **passed**.
 - `git diff --check`: **passed**.
 - Running pytest from the repository root also collects `network_management/test_vyos_ssh.py`, which attempts a live SSH connection to the lab router and is blocked by the sandbox. The supported isolated backend suite above avoids that unrelated network test.

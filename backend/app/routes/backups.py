@@ -2,7 +2,7 @@ from flask import Blueprint, request
 
 from app.extensions import get_container
 from app.services.backup_service import safe_backup_view
-from app.utils.auth import require_api_key
+from app.utils.auth import require_permission
 from app.utils.responses import ok, ok_list
 from app.utils.validators import parse_pagination
 
@@ -10,7 +10,7 @@ bp = Blueprint("backups", __name__, url_prefix="/api/backups")
 
 
 @bp.get("", strict_slashes=False)
-@require_api_key
+@require_permission("backups.read")
 def list_backups():
     limit, offset = parse_pagination(request.args)
     rows = get_container().backups.list(
@@ -21,7 +21,7 @@ def list_backups():
 
 
 @bp.get("/<backup_id>")
-@require_api_key
+@require_permission("backups.read")
 def get_backup(backup_id):
     """Returns the full configuration text - protected by the API key."""
     c = get_container()

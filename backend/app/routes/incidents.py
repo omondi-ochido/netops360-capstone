@@ -1,7 +1,7 @@
 from flask import Blueprint, request
 
 from app.extensions import get_container
-from app.utils.auth import require_api_key
+from app.utils.auth import require_permission
 from app.utils.responses import ok, ok_list
 from app.utils.validators import parse_bool_arg, parse_pagination, validate_uuid
 
@@ -9,6 +9,7 @@ bp = Blueprint("incidents", __name__, url_prefix="/api/incidents")
 
 
 @bp.get("", strict_slashes=False)
+@require_permission("incidents.read")
 def list_incidents():
     c = get_container()
     limit, offset = parse_pagination(request.args)
@@ -27,12 +28,13 @@ def list_incidents():
 
 
 @bp.get("/<incident_id>")
+@require_permission("incidents.read")
 def get_incident(incident_id):
     return ok(get_container().incidents.get(incident_id))
 
 
 @bp.post("/<incident_id>/acknowledge")
-@require_api_key
+@require_permission("incidents.acknowledge")
 def acknowledge(incident_id):
     c = get_container()
     before = c.incidents.get(incident_id)
@@ -43,7 +45,7 @@ def acknowledge(incident_id):
 
 
 @bp.post("/<incident_id>/resolve")
-@require_api_key
+@require_permission("incidents.resolve")
 def resolve(incident_id):
     c = get_container()
     before = c.incidents.get(incident_id)

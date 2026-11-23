@@ -5,6 +5,7 @@ parameters - no SQL string is ever assembled from request data.
 Raw database errors are logged (sanitised) and converted to safe AppErrors.
 """
 import logging
+import re
 
 from app.models.constants import ACTIVE_INCIDENT_STATUSES
 from app.utils.exceptions import ConflictError, DatabaseError, ValidationError
@@ -63,6 +64,98 @@ class SupabaseRepository:
 
     def insert_audit_log(self, data):
         return _first(_execute(self._t("audit_logs").insert(data)))
+
+    # ---------------------------------------------------------- auth / RBAC
+    def get_profile(self, user_id):
+        return _first(_execute(self._t("profiles").select("*").eq("id", str(user_id)).limit(1)))
+
+    def profile_exists_by_email(self, email):
+        return bool(_execute(self._t("profiles").select("id").ilike("email", str(email)).limit(1)).data)
+
+    def list_profiles(self, limit=50, offset=0, search=None, status=None):
+        q = self._t("profiles").select("*", count="exact").order("email")
+        if status:
+            q = q.eq("account_status", status)
+        if search:
+            term = re.sub(r"[^A-Za-z0-9@.+_ -]", "", str(search).strip())[:100]
+            q = q.or_(f"email.ilike.%{term}%,full_name.ilike.%{term}%")
+        res = _execute(q.range(offset, offset + limit - 1))
+        return res.data, res.count
+
+    def create_profile(self, data):
+        return _first(_execute(self._t("profiles").insert(data)))
+
+    def update_profile(self, user_id, data):
+        return _first(_execute(self._t("profiles").update(data).eq("id", str(user_id))))
+
+    def list_roles(self):
+        return _execute(self._t("roles").select("*").order("name")).data
+
+    def get_role(self, role_id):
+        return _first(_execute(self._t("roles").select("*").eq("id", str(role_id)).limit(1)))
+
+    def get_role_by_name(self, role_name):
+        return _first(_execute(self._t("roles").select("*").eq("name", role_name).limit(1)))
+
+    def list_permissions(self):
+        return _execute(self._t("permissions").select("*").order("permission_key")).data
+
+    def list_user_role_rows(self, user_id):
+        return _execute(self._t("user_roles").select(
+            "id,user_id,role_id,assigned_by,assigned_at,role:roles(id,name,description)"
+        ).eq("user_id", str(user_id))).data
+
+    def get_user_roles(self, user_id):
+        return [row["role"]["name"] for row in self.list_user_role_rows(user_id) if row.get("role")]
+
+    def get_user_permissions(self, user_id):
+        roles = _execute(self._t("user_roles").select("role_id").eq("user_id", str(user_id))).data
+        role_ids = [row["role_id"] for row in roles]
+        if not role_ids:
+            return []
+        rows = _execute(self._t("role_permissions").select(
+            "permission:permissions(permission_key)"
+        ).in_("role_id", role_ids)).data
+        return sorted({row["permission"]["permission_key"] for row in rows if row.get("permission")})
+
+    def get_role_permissions(self, role_id):
+        rows = _execute(self._t("role_permissions").select(
+            "permission:permissions(permission_key)"
+        ).eq("role_id", str(role_id))).data
+        return sorted({row["permission"]["permission_key"] for row in rows if row.get("permission")})
+
+    def assign_user_role(self, user_id, role_id, assigned_by):
+        return _first(_execute(self._t("user_roles").insert({
+            "user_id": str(user_id), "role_id": str(role_id), "assigned_by": str(assigned_by),
+        })))
+
+    def remove_user_role(self, user_id, role_id):
+        return bool(_execute(self._t("user_roles").delete()
+                             .eq("user_id", str(user_id)).eq("role_id", str(role_id))).data)
+
+    def count_active_super_admins(self):
+        role = self.get_role_by_name("super_admin")
+        if not role:
+            return 0
+        rows = _execute(self._t("user_roles").select("user_id").eq("role_id", role["id"])).data
+        user_ids = [row["user_id"] for row in rows]
+        if not user_ids:
+            return 0
+        return len(_execute(self._t("profiles").select("id").in_("id", user_ids)
+                            .eq("account_status", "active")).data)
+
+    def list_user_audit_logs(self, user_id, limit=50, offset=0):
+        return _execute(self._t("audit_logs").select("*").eq("actor_user_id", str(user_id))
+                        .order("occurred_at", desc=True).range(offset, offset + limit - 1)).data
+
+    def is_session_revoked(self, session_id):
+        return bool(_execute(self._t("revoked_sessions").select("session_id")
+                             .eq("session_id", str(session_id)).limit(1)).data)
+
+    def revoke_session(self, session_id, user_id, expires_at):
+        return _first(_execute(self._t("revoked_sessions").upsert({
+            "session_id": str(session_id), "user_id": str(user_id), "expires_at": expires_at,
+        }, on_conflict="session_id")))
 
     # ------------------------------------------------------------------ health
     def ping(self):

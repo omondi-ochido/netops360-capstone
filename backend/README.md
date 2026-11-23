@@ -37,7 +37,8 @@ python run.py               # http://localhost:5050
 | Variable | Required | Notes |
 |---|---|---|
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | yes | server-side only |
-| `API_KEY` | production-required | clients send `X-API-Key`; empty disables auth in development only (logged warning). Do not put this shared key in a public browser bundle. |
+| `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE` | yes for auth | token issuer defaults to `<SUPABASE_URL>/auth/v1`; audience defaults to `authenticated` |
+| `FRONTEND_URL` | no | allow-listed redirect base for Auth invitations; default `http://localhost:5173` |
 | `NETOPS_SSH_USERNAME`, `NETOPS_SSH_PASSWORD` | for backups | never hardcoded or logged |
 | `N8N_WEBHOOK_URL`, `N8N_WEBHOOK_SECRET` | for automation | empty URL = automation off, no log noise |
 | `CORS_ALLOWED_ORIGINS` | no | comma-separated; default `http://localhost:5173`; `*` is rejected |
@@ -54,25 +55,24 @@ Responses: lists `{"data": [...], "pagination": {limit, offset, count}, "timesta
 `{"data": {...}, "timestamp"}`; errors `{"error": {"code", "message"}, "timestamp"}`.
 **Exception (backward compatibility):** `GET /api/devices` returns `{"devices": [...], "timestamp": "..."}`.
 
-`Key` = requires `X-API-Key` when `API_KEY` is set.
+Protected endpoints require a Supabase bearer token and the listed permission. Public data routes are also authenticated.
 
-| Method & path | Key | Notes |
+| Method & path | Permission | Notes |
 |---|---|---|
 | `GET /api/health` | | backend + database + monitoring-loop status; 200 `degraded` if the DB is down |
-| `GET /api/devices` | | `?status=`, `?limit=&offset=`, `?refresh=true` (rate-limited on-demand check) |
-| `GET /api/devices/<id>` | | `<id>` is a UUID **or** hostname |
-| `POST /api/devices`, `PATCH /api/devices/<id>` | yes | validated; whitelisted fields |
-| `DELETE /api/devices/<id>` | yes | soft delete |
-| `POST /api/devices/<id>/backup` | yes | manual Netmiko backup |
-| `GET /api/devices/<id>/backups` | yes | metadata only |
-| `GET /api/monitoring/history` | | `device_id, status, since, until, limit, offset` |
-| `GET /api/monitoring/latest`, `/summary` | | |
-| `POST /api/monitoring/run` | yes | immediate check of all monitored devices |
-| `GET/POST /api/rules`, `GET/PATCH/DELETE /api/rules/<id>` | writes | delete refused (409) if the rule has incident history |
-| `GET /api/incidents`, `GET /api/incidents/<id>` | | `status, severity, device_id, rule_id, active=true` |
-| `POST /api/incidents/<id>/acknowledge`, `/resolve` | yes | |
-| `GET /api/backups`, `GET /api/backups/<id>` | yes | the `<id>` form returns the configuration text |
-| `GET /api/automation/logs`, `POST /api/automation/retry/<log_id>` | yes | |
+| `GET /api/devices` | `devices.read` | `?status=`, `?limit=&offset=`, `?refresh=true` |
+| `GET /api/devices/<id>` | `devices.read` | `<id>` is a UUID **or** hostname |
+| `POST /api/devices`, `PATCH /api/devices/<id>` | `devices.create/update` | validated; whitelisted fields |
+| `DELETE /api/devices/<id>` | `devices.delete` | soft delete |
+| `POST /api/devices/<id>/backup` | `backups.create` | manual Netmiko backup |
+| `GET /api/devices/<id>/backups` | `backups.read` | metadata only |
+| `GET /api/monitoring/*` | `monitoring.read` | history, latest and summary |
+| `POST /api/monitoring/run` | `monitoring.manage` | immediate check of monitored devices |
+| `GET/POST /api/rules`, `GET/PATCH/DELETE /api/rules/<id>` | `rules.read/create/update/delete` | delete refused (409) if incident history exists |
+| `GET /api/incidents*` | `incidents.read` | `status, severity, device_id, rule_id, active=true` |
+| `POST /api/incidents/<id>/acknowledge`, `/resolve` | `incidents.acknowledge/resolve` | |
+| `GET /api/backups*` | `backups.read` | detail form returns configuration text |
+| `GET /api/automation/logs` / retry | `automation.read/execute` | |
 
 ## Behaviour
 
@@ -118,7 +118,7 @@ if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(headerSignature))
 
 ```bash
 cd backend
-pytest                    # 124 tests, no network / Supabase / GNS3 needed
+pytest                    # local in-memory suite, no network / Supabase / GNS3 needed
 pytest -m integration     # needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (otherwise skipped)
 ```
 
@@ -127,12 +127,13 @@ pytest -m integration     # needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (othe
 * Debug off by default; CORS restricted to configured origins; request bodies whitelisted and validated;
   UUIDs/IPs validated; no SQL is built from input (query builder + RPC with bound parameters).
 * Errors returned to clients are generic; details go to the server log, which never contains secrets.
-* **Authentication gap:** there is no user authentication. `API_KEY` is a single shared secret - an interim
-  measure. Production startup requires it. A key shipped in a browser bundle is visible to every user;
-  before public deployment, put the API behind real auth (for example Supabase Auth JWT verification or
-  an authenticated reverse proxy). Backup content reads remain key protected and are audited.
-* `GET /api/devices`, `/api/monitoring/*`, `/api/rules`, `/api/incidents` and `/api/health` are intentionally
-  open reads so the existing dashboard keeps working.
+* Supabase Auth verifies credentials and recovery codes. Flask checks bearer JWT signatures, issuer,
+  audience, expiry, active profile, revoked session, and database permissions.
+* User accounts are invite only. Application roles are held in `profiles`, `roles`, `permissions`,
+  `user_roles`, and `role_permissions`; do not put role claims in browser-controlled payloads.
+* `GET /api/health` is public for health checks. Resource APIs require a bearer token.
+* See [../docs/AUTH_SETUP.md](../docs/AUTH_SETUP.md) for Auth settings, migration order, first-admin
+  bootstrap, and email OTP password recovery setup.
 
 ## Troubleshooting
 

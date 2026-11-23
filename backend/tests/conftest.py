@@ -26,6 +26,7 @@ DEFAULT_RULES = [
 
 TEST_CONFIG = {
     "testing": True,
+    "auth_test_bypass": True,
     "api_key": "",
     "n8n_webhook_url": "",
     "n8n_webhook_secret": "",

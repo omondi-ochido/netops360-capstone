@@ -30,3 +30,12 @@ export async function retryAutomation(id) {
 export async function fetchMonitoringHistory(params) {
   return listData(await apiRequest(`/api/monitoring/history${queryString(params)}`));
 }
+
+export async function fetchUsers(params) { return listData(await apiRequest(`/api/users${queryString(params)}`)); }
+export async function inviteUser(body) { return resourceData(await apiRequest("/api/users", { method: "POST", body: JSON.stringify(body) })); }
+export async function updateUser(id, body) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) })); }
+export async function setUserStatus(id, status) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}/status`, { method: "PATCH", body: JSON.stringify({ status }) })); }
+export async function fetchRoles() { return resourceData(await apiRequest("/api/roles")); }
+export async function assignUserRole(id, role_id) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}/roles`, { method: "POST", body: JSON.stringify({ role_id }) })); }
+export async function removeUserRole(id, roleId) { return apiRequest(`/api/users/${encodeURIComponent(id)}/roles/${encodeURIComponent(roleId)}`, { method: "DELETE" }); }
+export async function fetchUserAudit(id) { return listData(await apiRequest(`/api/users/${encodeURIComponent(id)}/audit-logs`)); }

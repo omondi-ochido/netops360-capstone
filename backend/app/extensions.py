@@ -12,6 +12,7 @@ from app.services.device_service import DeviceService
 from app.services.incident_service import IncidentService
 from app.services.monitoring_service import MonitoringService, MonitorRunner
 from app.services.rule_engine import RuleEngine
+from app.services.user_service import UserService
 from app.utils.exceptions import AppError
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,10 @@ class Container:
         self.config = config
         self.repo = repo
         self.audit = AuditService(repo)
+        auth_admin = getattr(repo, "auth_admin", None)
+        if auth_admin is None:
+            auth_admin = getattr(getattr(getattr(repo, "client", None), "auth", None), "admin", None)
+        self.users = UserService(repo, auth_admin, config, self.audit)
         self.automation = AutomationService(repo, config)
         self.incidents = IncidentService(repo, automation=self.automation)
         self.rules = RuleEngine(repo, incident_service=self.incidents)

@@ -40,7 +40,7 @@ def create_app(config_overrides=None, repository=None):
 
     app = Flask(__name__)
     cors.init_app(app, resources={r"/api/*": {"origins": config.cors_origins}},
-                  allow_headers=["Content-Type", "X-API-Key", "X-Request-ID"],
+                  allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
                   expose_headers=["X-Request-ID"],
                   methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"])
 
@@ -75,9 +75,6 @@ def create_app(config_overrides=None, repository=None):
 
     register_blueprints(app)
 
-    if not config.api_key:
-        logger.warning("API_KEY is not set: write, backup and automation endpoints are UNPROTECTED. "
-                       "Set API_KEY before exposing this service beyond a trusted lab network.")
     if _should_start_monitor(config):
         container.monitor_runner.start()
     return app

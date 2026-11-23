@@ -191,11 +191,11 @@ def test_retries_stop_at_max(container, repo, dev, http):
 
 def test_automation_logs_api_filters_and_auth(make_app, container, repo, dev, http):
     trigger_offline(container, dev)
-    c = make_app(api_key="k").test_client()
+    c = make_app(auth_test_bypass=False).test_client()
     assert c.get("/api/automation/logs").status_code == 401
-    h = {"X-API-Key": "k"}
-    assert len(c.get("/api/automation/logs", headers=h).get_json()["data"]) == 2
-    assert len(c.get("/api/automation/logs?status=failed", headers=h).get_json()["data"]) == 0
-    assert c.get("/api/automation/logs?status=bogus", headers=h).status_code == 400
-    assert c.get("/api/automation/logs?incident_id=zzz", headers=h).status_code == 400
-    assert c.post("/api/automation/retry/x", headers=h).status_code == 400
+    c = make_app().test_client()
+    assert len(c.get("/api/automation/logs").get_json()["data"]) == 2
+    assert len(c.get("/api/automation/logs?status=failed").get_json()["data"]) == 0
+    assert c.get("/api/automation/logs?status=bogus").status_code == 400
+    assert c.get("/api/automation/logs?incident_id=zzz").status_code == 400
+    assert c.post("/api/automation/retry/x").status_code == 400

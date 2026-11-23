@@ -23,7 +23,13 @@ class ValidationError(AppError):
 class AuthError(AppError):
     status_code = 401
     code = "unauthorized"
-    default_message = "A valid API key is required."
+    default_message = "A valid Supabase access token is required."
+
+
+class ForbiddenError(AppError):
+    status_code = 403
+    code = "forbidden"
+    default_message = "You do not have permission to perform this operation."
 
 
 class NotFoundError(AppError):

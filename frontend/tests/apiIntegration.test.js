@@ -2,15 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fetchDevices, createDevice } from "../src/services/deviceService.js";
 import { fetchRules, acknowledgeIncident } from "../src/services/operationsService.js";
+import { setSupabaseClientForTests } from "../src/services/supabaseClient.js";
 
 const originalFetch = globalThis.fetch;
+const authStub = { auth: { getSession: async () => ({ data: { session: { access_token: "test-access-token" } }, error: null }), refreshSession: async () => ({ data: { session: { access_token: "refreshed-token" } }, error: null }), signOut: async () => ({ error: null }) } };
+setSupabaseClientForTests(authStub);
 
 test.afterEach(() => { globalThis.fetch = originalFetch; });
 
 test("device inventory consumes Flask's persisted device response", async () => {
   let requestUrl;
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, options) => {
     requestUrl = url;
+    assert.equal(options.headers.get("Authorization"), "Bearer test-access-token");
     return new Response(JSON.stringify({ devices: [{ id: "d-1", hostname: "edge", ip_address: "192.0.2.1",
       device_type: "access_point", current_status: "Unknown", last_latency_ms: null,
       last_packet_loss: null, last_checked_at: null, monitoring_enabled: true }], pagination: { limit: 20, offset: 0 } }));
@@ -34,8 +38,11 @@ test("device creation sends canonical Flask payload and surfaces API errors", as
   assert.deepEqual(JSON.parse(options.body), { hostname: "new", ip_address: "192.0.2.2", device_type: "host" });
   assert.equal(created.id, "d-2");
 
-  globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: "unauthorized", message: "A valid API key is required." } }), { status: 401 });
-  await assert.rejects(createDevice({}), /valid API key/);
+  globalThis.fetch = async (_url, request) => {
+    assert.match(request.headers.get("Authorization"), /^Bearer (test-access-token|refreshed-token)$/);
+    return new Response(JSON.stringify({ error: { code: "unauthorized", message: "Invalid or expired access token." } }), { status: 401 });
+  };
+  await assert.rejects(createDevice({}), /Invalid or expired access token/);
 });
 
 test("rules and incident actions call existing Flask resource routes", async () => {

@@ -1,7 +1,7 @@
 from flask import Blueprint, request
 
 from app.extensions import get_container
-from app.utils.auth import require_api_key
+from app.utils.auth import require_permission
 from app.utils.responses import ok, ok_list
 from app.utils.validators import json_body, parse_bool_arg, parse_pagination
 
@@ -9,6 +9,7 @@ bp = Blueprint("rules", __name__, url_prefix="/api/rules")
 
 
 @bp.get("", strict_slashes=False)
+@require_permission("rules.read")
 def list_rules():
     limit, offset = parse_pagination(request.args)
     enabled = parse_bool_arg(request.args.get("enabled"), "enabled")
@@ -17,7 +18,7 @@ def list_rules():
 
 
 @bp.post("", strict_slashes=False)
-@require_api_key
+@require_permission("rules.create")
 def create_rule():
     c = get_container()
     rule = c.rules.create_rule(json_body(request))
@@ -26,12 +27,13 @@ def create_rule():
 
 
 @bp.get("/<rule_id>")
+@require_permission("rules.read")
 def get_rule(rule_id):
     return ok(get_container().rules.get_rule(rule_id))
 
 
 @bp.patch("/<rule_id>")
-@require_api_key
+@require_permission("rules.update")
 def update_rule(rule_id):
     c = get_container()
     before = c.rules.get_rule(rule_id)
@@ -41,7 +43,7 @@ def update_rule(rule_id):
 
 
 @bp.delete("/<rule_id>")
-@require_api_key
+@require_permission("rules.delete")
 def delete_rule(rule_id):
     c = get_container()
     before = c.rules.get_rule(rule_id)

@@ -38,6 +38,10 @@ class Config:
         self.supabase_service_role_key = ""
 
         self.api_key = ""
+        self.supabase_jwt_issuer = ""
+        self.supabase_jwt_audience = "authenticated"
+        self.auth_test_bypass = False
+        self.frontend_url = "http://localhost:5173"
 
         self.ssh_username = ""
         self.ssh_password = ""
@@ -77,6 +81,10 @@ class Config:
         c.supabase_url = _env_str("SUPABASE_URL")
         c.supabase_service_role_key = _env_str("SUPABASE_SERVICE_ROLE_KEY")
         c.api_key = _env_str("API_KEY")
+        c.supabase_jwt_issuer = _env_str("SUPABASE_JWT_ISSUER", f"{c.supabase_url.rstrip('/')}/auth/v1" if c.supabase_url else "")
+        c.supabase_jwt_audience = _env_str("SUPABASE_JWT_AUDIENCE", "authenticated")
+        c.auth_test_bypass = _env_bool("AUTH_TEST_BYPASS", False)
+        c.frontend_url = _env_str("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 
         c.ssh_username = _env_str("NETOPS_SSH_USERNAME")
         c.ssh_password = os.environ.get("NETOPS_SSH_PASSWORD", "")
@@ -115,8 +123,8 @@ class Config:
                 problems.append("SUPABASE_URL is required")
             if not self.supabase_service_role_key:
                 problems.append("SUPABASE_SERVICE_ROLE_KEY is required")
-        if self.env.lower() in ("production", "prod") and not self.api_key:
-            problems.append("API_KEY is required in production")
+        if self.auth_test_bypass and not self.testing:
+            problems.append("AUTH_TEST_BYPASS is allowed only in testing")
         if not 1 <= self.ping_count <= 10:
             problems.append("PING_COUNT must be between 1 and 10")
         if not 1 <= self.ping_timeout_seconds <= 30:

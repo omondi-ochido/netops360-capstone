@@ -84,10 +84,8 @@ def test_delete_is_soft_and_keeps_history(client, dev, repo):
     assert client.get(f"/api/devices/{d['id']}").status_code == 404
 
 
-def test_api_key_protects_mutations_only(make_app):
-    client = make_app(api_key="s3cret").test_client()
+def test_bearer_auth_protects_mutations(make_app):
+    client = make_app(auth_test_bypass=False).test_client()
     body = {"hostname": "PC9", "ip_address": "10.1.1.9", "device_type": "host"}
-    assert client.get("/api/devices").status_code == 200          # dashboard read stays open
     assert client.post("/api/devices", json=body).status_code == 401
-    assert client.post("/api/devices", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
-    assert client.post("/api/devices", json=body, headers={"X-API-Key": "s3cret"}).status_code == 201
+    assert client.post("/api/devices", json=body, headers={"X-API-Key": "s3cret"}).status_code == 401

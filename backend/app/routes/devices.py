@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from app.extensions import get_container
 from app.services.backup_service import safe_backup_view
 from app.services.device_service import legacy_view
-from app.utils.auth import require_api_key
+from app.utils.auth import require_permission
 from app.utils.responses import ok, ok_list
 from app.utils.timeutil import now_iso
 from app.utils.validators import (
@@ -14,6 +14,7 @@ bp = Blueprint("devices", __name__, url_prefix="/api/devices")
 
 
 @bp.get("", strict_slashes=False)
+@require_permission("devices.read")
 def list_devices():
     """Backward compatible: {"devices": [...], "timestamp": "..."}."""
     c = get_container()
@@ -31,12 +32,13 @@ def list_devices():
 
 
 @bp.get("/<device_id>")
+@require_permission("devices.read")
 def get_device(device_id):
     return ok(legacy_view(get_container().devices.get(device_id)))
 
 
 @bp.post("", strict_slashes=False)
-@require_api_key
+@require_permission("devices.create")
 def create_device():
     c = get_container()
     device = c.devices.create(json_body(request))
@@ -45,7 +47,7 @@ def create_device():
 
 
 @bp.patch("/<device_id>")
-@require_api_key
+@require_permission("devices.update")
 def update_device(device_id):
     c = get_container()
     before = c.devices.get(device_id)
@@ -55,7 +57,7 @@ def update_device(device_id):
 
 
 @bp.delete("/<device_id>")
-@require_api_key
+@require_permission("devices.delete")
 def delete_device(device_id):
     """Soft delete: preserves monitoring, incident and backup history."""
     c = get_container()
@@ -66,7 +68,7 @@ def delete_device(device_id):
 
 
 @bp.post("/<device_id>/backup")
-@require_api_key
+@require_permission("backups.create")
 def backup_device(device_id):
     c = get_container()
     result = c.backups.run_backup(device_id, "manual")
@@ -74,7 +76,7 @@ def backup_device(device_id):
 
 
 @bp.get("/<device_id>/backups")
-@require_api_key
+@require_permission("backups.read")
 def device_backups(device_id):
     limit, offset = parse_pagination(request.args)
     rows = get_container().backups.history(device_id, request.args.get("status"), limit, offset)

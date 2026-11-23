@@ -1,7 +1,7 @@
 from flask import Blueprint, request
 
 from app.extensions import get_container
-from app.utils.auth import require_api_key
+from app.utils.auth import require_permission
 from app.utils.responses import ok, ok_list
 from app.utils.validators import (
     parse_pagination, parse_timestamp_arg, validate_status,
@@ -11,6 +11,7 @@ bp = Blueprint("monitoring", __name__, url_prefix="/api/monitoring")
 
 
 @bp.get("/history")
+@require_permission("monitoring.read")
 def history():
     c = get_container()
     limit, offset = parse_pagination(request.args)
@@ -30,6 +31,7 @@ def history():
 
 
 @bp.get("/latest")
+@require_permission("monitoring.read")
 def latest():
     devices = get_container().devices.list()
     fields = ("id", "hostname", "ip_address", "current_status", "last_latency_ms",
@@ -38,12 +40,13 @@ def latest():
 
 
 @bp.get("/summary")
+@require_permission("monitoring.read")
 def summary():
     return ok(get_container().monitoring.summary())
 
 
 @bp.post("/run")
-@require_api_key
+@require_permission("monitoring.manage")
 def run_now():
     """Trigger an immediate check of all monitored devices."""
     results = get_container().monitoring.run_cycle(only_due=False)

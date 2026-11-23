@@ -22,22 +22,22 @@ def test_device_mutations_write_redacted_audit_records(client, repo):
     assert repo.audit_logs[-1]["action"] == "deactivated"
 
 
-def test_backup_detail_access_requires_api_key_and_audits_read(make_app, client, repo, dev):
+def test_backup_detail_access_requires_bearer_auth_and_audits_read(make_app, client, repo, dev):
     device = dev("main-rtr")
     backup = repo.insert_backup({"device_id": device["id"], "configuration": "set system host-name safe",
                                  "status": "success", "checksum": "a" * 64, "backup_type": "manual"})
-    secured = make_app(api_key="secret").test_client()
+    secured = make_app(auth_test_bypass=False).test_client()
     assert secured.get(f"/api/backups/{backup['id']}").status_code == 401
-    response = secured.get(f"/api/backups/{backup['id']}", headers={"X-API-Key": "secret"})
+    response = client.get(f"/api/backups/{backup['id']}")
     assert response.status_code == 200
     row = repo.audit_logs[-1]
     assert row["action"] == "sensitive_contents_read"
     assert "configuration" not in row["after_metadata"]
 
 
-def test_production_requires_api_key(make_app):
+def test_auth_test_bypass_is_forbidden_outside_testing(make_app):
     from app.config import ConfigError
     import pytest
 
-    with pytest.raises(ConfigError, match="API_KEY is required in production"):
-        make_app(env="production", api_key="")
+    with pytest.raises(ConfigError, match="AUTH_TEST_BYPASS is allowed only in testing"):
+        make_app(env="production", testing=False, auth_test_bypass=True)

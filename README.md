@@ -22,8 +22,8 @@ npm install
 npm run dev
 ```
 
-Copy `frontend/.env.example` to `frontend/.env` to configure the API base URL. `VITE_API_KEY`
-is only suitable for a trusted local lab because Vite embeds it in the browser bundle.
+Copy `frontend/.env.example` to `frontend/.env` and set the Supabase project URL, publishable key,
+and Flask API base URL. Never put the Supabase service-role key in frontend configuration.
 
 ## Run the backend
 
@@ -35,13 +35,13 @@ pip install -r requirements.txt
 python run.py
 ```
 
-The API health endpoint is available at `http://localhost:5050/api/health`. Configure
-`CORS_ALLOWED_ORIGINS` and `API_KEY` in `backend/.env`. Production requires an `API_KEY`, but a
-shared key must not be shipped to browser users; deploy behind an authenticated proxy or add user
-authentication before exposing protected operations publicly.
+The API health endpoint is available at `http://localhost:5050/api/health`. Configure Supabase
+server credentials, JWT issuer/audience, and `CORS_ALLOWED_ORIGINS` in `backend/.env`.
 
 Apply `database/schema.sql`, then the versioned files under `database/migrations/` in filename
 order, then `database/seed.sql` for a new project. See [database/README.md](database/README.md).
 See [docs/IMPLEMENTATION_REPORT.md](docs/IMPLEMENTATION_REPORT.md) for the integration summary and
 verification limits.
 See [docs/IMPLEMENTATION_AUDIT.md](docs/IMPLEMENTATION_AUDIT.md) for the preliminary audit.
+See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for Supabase Auth, invite, recovery-code, and RBAC setup.
+See [docs/AUTH_IMPLEMENTATION_AUDIT.md](docs/AUTH_IMPLEMENTATION_AUDIT.md) for the auth gap review.
