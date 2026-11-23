@@ -1,0 +1,43 @@
+from flask import Blueprint, request
+
+from app.extensions import get_container
+from app.utils.auth import require_api_key
+from app.utils.responses import ok, ok_list
+from app.utils.validators import parse_bool_arg, parse_pagination, validate_uuid
+
+bp = Blueprint("incidents", __name__, url_prefix="/api/incidents")
+
+
+@bp.get("", strict_slashes=False)
+def list_incidents():
+    c = get_container()
+    limit, offset = parse_pagination(request.args)
+    device_ref = request.args.get("device_id")
+    device_id = c.devices.get(device_ref)["id"] if device_ref else None
+    rule_id = request.args.get("rule_id")
+    if rule_id:
+        rule_id = validate_uuid(rule_id, "rule_id")
+    rows = c.incidents.list(
+        status=request.args.get("status"), severity=request.args.get("severity"),
+        device_id=device_id, rule_id=rule_id,
+        active_only=bool(parse_bool_arg(request.args.get("active"), "active")),
+        limit=limit, offset=offset,
+    )
+    return ok_list(rows, limit, offset)
+
+
+@bp.get("/<incident_id>")
+def get_incident(incident_id):
+    return ok(get_container().incidents.get(incident_id))
+
+
+@bp.post("/<incident_id>/acknowledge")
+@require_api_key
+def acknowledge(incident_id):
+    return ok(get_container().incidents.acknowledge(incident_id))
+
+
+@bp.post("/<incident_id>/resolve")
+@require_api_key
+def resolve(incident_id):
+    return ok(get_container().incidents.resolve(incident_id))

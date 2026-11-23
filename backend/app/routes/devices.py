@@ -1,85 +1,70 @@
-import re
-import subprocess
-from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
-from netmiko import ConnectHandler
 
-devices_bp = Blueprint("devices", __name__)
+from app.extensions import get_container
+from app.services.backup_service import safe_backup_view
+from app.services.device_service import legacy_view
+from app.utils.auth import require_api_key
+from app.utils.responses import ok, ok_list
+from app.utils.timeutil import now_iso
+from app.utils.validators import (
+    json_body, parse_bool_arg, parse_pagination, validate_status,
+)
 
-# Active GNS3 Main Site Inventory
-GNS3_DEVICES = [
-    {"id": "dev-1", "hostname": "main-rtr", "ipAddress": "192.168.100.10", "deviceType": "Router", "os": "VyOS 1.5", "site": "Main Site", "sshEnabled": True},
-    {"id": "dev-2", "hostname": "MAIN-SERVER", "ipAddress": "192.168.10.100", "deviceType": "Server", "os": "VPCS / Linux Server", "site": "Main Site", "sshEnabled": False},
-    {"id": "dev-3", "hostname": "PC1", "ipAddress": "192.168.10.11", "deviceType": "Host", "os": "VPCS", "site": "Main Site", "sshEnabled": False},
-    {"id": "dev-4", "hostname": "PC2", "ipAddress": "192.168.10.12", "deviceType": "Host", "os": "VPCS", "site": "Main Site", "sshEnabled": False},
-    {"id": "dev-5", "hostname": "PC3", "ipAddress": "192.168.10.13", "deviceType": "Host", "os": "VPCS", "site": "Main Site", "sshEnabled": False},
-    {"id": "dev-6", "hostname": "PC4", "ipAddress": "192.168.10.14", "deviceType": "Host", "os": "VPCS", "site": "Main Site", "sshEnabled": False},
-    {"id": "dev-7", "hostname": "MANAGEMENT-SW", "ipAddress": "192.168.100.2", "deviceType": "Switch", "os": "GNS3 Ethernet Switch", "site": "Management", "sshEnabled": False, "layer2Only": True},
-    {"id": "dev-8", "hostname": "SW1", "ipAddress": "192.168.10.2", "deviceType": "Switch", "os": "GNS3 Ethernet Switch", "site": "Main Site", "sshEnabled": False, "layer2Only": True},
-    {"id": "dev-9", "hostname": "SW2", "ipAddress": "192.168.10.3", "deviceType": "Switch", "os": "GNS3 Ethernet Switch", "site": "Main Site", "sshEnabled": False, "layer2Only": True},
-]
+bp = Blueprint("devices", __name__, url_prefix="/api/devices")
 
-def ping_host(ip_address):
-    try:
-        res = subprocess.run(
-            ["ping", "-c", "1", "-W", "1", ip_address],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if res.returncode == 0:
-            match = re.search(r"time=([\d.]+)\s*ms", res.stdout)
-            latency = float(match.group(1)) if match else 1.0
-            return "Online", round(latency, 2), 0
-        return "Offline", None, 100
-    except Exception:
-        return "Offline", None, 100
 
-@devices_bp.route("/api/devices", methods=["GET"])
-def get_devices():
-    now = datetime.now(timezone.utc).isoformat()
-    results = []
-    for dev in GNS3_DEVICES:
-        item = dict(dev)
-        if dev.get("layer2Only"):
-            # Unmanaged L2 switches have no IP stack; reflect active topology link
-            item["status"] = "Online"
-            item["latencyMs"] = 0.5
-            item["packetLoss"] = 0
-        else:
-            status, latency, loss = ping_host(dev["ipAddress"])
-            item["status"] = status
-            item["latencyMs"] = latency
-            item["packetLoss"] = loss
-        item["lastChecked"] = now
-        results.append(item)
-    return jsonify({"devices": results, "timestamp": now})
+@bp.get("", strict_slashes=False)
+def list_devices():
+    """Backward compatible: {"devices": [...], "timestamp": "..."}."""
+    c = get_container()
+    limit, offset = parse_pagination(request.args, default=200, maximum=200)
+    status = request.args.get("status")
+    if status:
+        validate_status(status)
+    if parse_bool_arg(request.args.get("refresh"), "refresh"):
+        c.monitoring.refresh()  # rate-limited on-demand check, like the old live ping
+    devices = c.devices.list(status=status, limit=limit, offset=offset)
+    return jsonify({"devices": [legacy_view(d) for d in devices],
+                    "count": len(devices), "timestamp": now_iso()})
 
-@devices_bp.route("/api/devices/<device_id>/backup", methods=["POST"])
+
+@bp.get("/<device_id>")
+def get_device(device_id):
+    return ok(legacy_view(get_container().devices.get(device_id)))
+
+
+@bp.post("", strict_slashes=False)
+@require_api_key
+def create_device():
+    device = get_container().devices.create(json_body(request))
+    return ok(legacy_view(device), 201)
+
+
+@bp.patch("/<device_id>")
+@require_api_key
+def update_device(device_id):
+    return ok(legacy_view(get_container().devices.update(device_id, json_body(request))))
+
+
+@bp.delete("/<device_id>")
+@require_api_key
+def delete_device(device_id):
+    """Soft delete: preserves monitoring, incident and backup history."""
+    get_container().devices.deactivate(device_id)
+    return ok({"deactivated": True})
+
+
+@bp.post("/<device_id>/backup")
+@require_api_key
 def backup_device(device_id):
-    device = next((d for d in GNS3_DEVICES if d["id"] == device_id), None)
-    if not device:
-        return jsonify({"error": "Device not found"}), 404
-    if not device.get("sshEnabled"):
-        return jsonify({"error": f"{device['hostname']} does not support SSH config backup"}), 400
+    c = get_container()
+    result = c.backups.run_backup(device_id, "manual")
+    return ok(result, 201)
 
-    try:
-        conn_params = {
-            "device_type": "vyos",
-            "host": device["ipAddress"],
-            "username": "vyos",
-            "password": "vyos",
-            "port": 22,
-        }
-        with ConnectHandler(**conn_params) as conn:
-            config = conn.send_command("show configuration commands")
-            interfaces = conn.send_command("show interfaces")
-        return jsonify({
-            "hostname": device["hostname"],
-            "ipAddress": device["ipAddress"],
-            "backedUpAt": datetime.now(timezone.utc).isoformat(),
-            "config": config,
-            "interfaces": interfaces,
-        })
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+
+@bp.get("/<device_id>/backups")
+@require_api_key
+def device_backups(device_id):
+    limit, offset = parse_pagination(request.args)
+    rows = get_container().backups.history(device_id, request.args.get("status"), limit, offset)
+    return ok_list([safe_backup_view(r) for r in rows], limit, offset)
