@@ -6,6 +6,8 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import requests
+
 from app.models.constants import SUPPORTED_MONITORING_METHODS
 from app.utils.exceptions import ValidationError
 from app.utils.timeutil import now_iso, parse_ts, utcnow
@@ -27,12 +29,15 @@ def parse_ping_output(output):
     return sent, received, (float(rtt.group(1)) if rtt else None)
 
 
-def build_ping_command(ip, count, timeout, system=None):
+def build_ping_command(ip, count, timeout, system=None, interval=None):
     system = system or platform.system()
+    command = ["ping", "-c", str(count)]
+    if interval is not None:
+        command.extend(["-i", str(interval)])
     if system == "Linux":
-        return ["ping", "-c", str(count), "-W", str(timeout), ip]
+        return [*command, "-W", str(timeout), ip]
     if system == "Darwin":  # macOS -W is in milliseconds
-        return ["ping", "-c", str(count), "-W", str(timeout * 1000), ip]
+        return [*command, "-W", str(timeout * 1000), ip]
     raise OSError(f"ICMP monitoring is not supported on {system}")
 
 
@@ -54,11 +59,65 @@ def _result(status, **extra):
     return base
 
 
-def ping_host(ip, count=3, timeout=2, partial_status="Warning", runner=subprocess.run, system=None):
+def _check_gns3_node_status(hostname, gns3_url="http://127.0.0.1:3080"):
+    offline_result = _result(
+        "Offline", latency_ms=None, packet_loss=100.0, check_type="manual",
+    )
+    try:
+        response = requests.get(f"{gns3_url}/v2/projects", timeout=2)
+        response.raise_for_status()
+        projects = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("GNS3 project lookup failed for %s (%s)", hostname, type(exc).__name__)
+        return offline_result
+
+    if not isinstance(projects, list):
+        logger.warning("GNS3 returned an invalid project list for %s", hostname)
+        return offline_result
+
+    opened_projects = [
+        project for project in projects
+        if isinstance(project, dict) and project.get("status") == "opened"
+    ]
+    for project in opened_projects or projects:
+        if not isinstance(project, dict):
+            continue
+        project_id = project.get("project_id") or project.get("id")
+        if not project_id:
+            continue
+        try:
+            response = requests.get(
+                f"{gns3_url}/v2/projects/{project_id}/nodes", timeout=2,
+            )
+            response.raise_for_status()
+            nodes = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning(
+                "GNS3 node lookup failed for %s (%s)", hostname, type(exc).__name__,
+            )
+            continue
+
+        if not isinstance(nodes, list):
+            continue
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = node.get("name")
+            if isinstance(name, str) and name.casefold() == hostname.casefold():
+                if node.get("status") == "started":
+                    return _result(
+                        "Online", latency_ms=0.5, packet_loss=0.0, check_type="manual",
+                    )
+
+    return offline_result
+
+
+def ping_host(ip, count=3, timeout=2, partial_status="Warning", runner=subprocess.run, system=None,
+              interval=None):
     """Ping one host without a shell. Never raises; failures become result dicts."""
     try:
         ip = validate_ip(ip)
-        cmd = build_ping_command(ip, count, timeout, system)
+        cmd = build_ping_command(ip, count, timeout, system, interval)
     except ValidationError as exc:
         return _result("Unknown", error_message=exc.message)
     except OSError as exc:
@@ -104,6 +163,10 @@ class MonitoringService:
     # ------------------------------------------------------------- one device
     def check_device(self, device):
         """Run the check for one device. Does not persist anything."""
+        if str(device.get("device_type", "")).lower() == "switch":
+            if self.config.testing or self.config.auth_test_bypass:
+                return _result("Unmonitored", error_message="GNS3 polling is disabled in test mode")
+            return _check_gns3_node_status(device["hostname"])
         if not device.get("monitoring_enabled"):
             return _result("Unmonitored", error_message="monitoring disabled")
         method = device.get("monitoring_method")
@@ -113,7 +176,8 @@ class MonitoringService:
             return _result("Unknown", check_type=method if method in ("tcp", "snmp") else "icmp",
                            error_message=f"unsupported monitoring method: {method}")
         return self._ping(device["ip_address"], self.config.ping_count,
-                          self.config.ping_timeout_seconds, self.config.partial_loss_status)
+                          self.config.ping_timeout_seconds, self.config.partial_loss_status,
+                          interval=self.config.ping_interval_seconds)
 
     def record_result(self, device, result):
         """Persist the log row and refresh the device's latest-state columns."""
@@ -158,7 +222,16 @@ class MonitoringService:
 
     def run_cycle(self, only_due=True):
         """Check every monitored device (pings in parallel, DB writes sequential)."""
-        devices = self.repo.list_devices(monitoring_enabled=True)
+        devices = self.repo.list_devices(monitoring_enabled=None)
+        devices = [
+            device for device in devices
+            if device.get("monitoring_enabled")
+            or (
+                not self.config.testing
+                and not self.config.auth_test_bypass
+                and str(device.get("device_type", "")).lower() == "switch"
+            )
+        ]
         now = utcnow()
         if only_due:
             devices = [d for d in devices if self._is_due(d, now)]

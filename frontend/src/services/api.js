@@ -1,7 +1,7 @@
 import { getSupabaseClient } from "./supabaseClient.js";
 
 const VITE_ENV = import.meta.env || {};
-const API_BASE_URL = (VITE_ENV.VITE_API_BASE_URL || "http://127.0.0.1:5050").replace(/\/+$/, "");
+const API_BASE_URL = (VITE_ENV.VITE_API_BASE_URL || "http://localhost:5050").replace(/\/+$/, "");
 
 function apiError(payload, status) {
   const error = new Error(payload.error?.message || payload.error || `Request failed (${status})`);

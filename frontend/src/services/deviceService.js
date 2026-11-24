@@ -22,7 +22,7 @@ export function mapDevice(row) {
 }
 
 export async function fetchDevices({ limit = 200, offset = 0 } = {}) {
-  const payload = await apiRequest(`/api/devices${queryString({ limit, offset })}`);
+  const payload = await apiRequest(`/api/devices${queryString({ limit, offset, refresh: true })}`);
   return { devices: listData(payload).map(mapDevice), pagination: payload.pagination, isLive: true };
 }
 

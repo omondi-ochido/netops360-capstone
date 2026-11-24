@@ -42,7 +42,7 @@ python run.py               # http://localhost:5050
 | `NETOPS_SSH_USERNAME`, `NETOPS_SSH_PASSWORD` | for backups | never hardcoded or logged |
 | `N8N_WEBHOOK_URL`, `N8N_WEBHOOK_SECRET` | for automation | empty URL = automation off, no log noise |
 | `CORS_ALLOWED_ORIGINS` | no | comma-separated; default `http://localhost:5173`; `*` is rejected |
-| `MONITORING_ENABLED` / `_INTERVAL_SECONDS` / `PING_COUNT` / `PING_TIMEOUT_SECONDS` | no | defaults true / 30 / 3 / 2 |
+| `MONITORING_ENABLED` / `MONITORING_INTERVAL_SECONDS` / `PING_COUNT` / `PING_INTERVAL_SECONDS` / `PING_TIMEOUT_SECONDS` | no | defaults true / 30 / 2 / 0.2 / 1 |
 | `PARTIAL_LOSS_STATUS` | no | status for 0% < loss < 100% (`Warning` or `Online`) |
 | `AUTOMATION_TIMEOUT_SECONDS` / `_MAX_RETRIES` / `_BACKOFF_SECONDS` | no | 10 / 5 / 30 |
 | `BACKUP_SCHEDULE_SECONDS` | no | 0 = scheduled backups off |

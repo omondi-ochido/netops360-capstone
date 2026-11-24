@@ -22,7 +22,8 @@ def list_devices():
     status = request.args.get("status")
     if status:
         validate_status(status)
-    if parse_bool_arg(request.args.get("refresh"), "refresh"):
+    if (parse_bool_arg(request.args.get("refresh"), "refresh")
+            and not c.config.testing and not c.config.auth_test_bypass):
         c.monitoring.refresh()  # rate-limited on-demand check, like the old live ping
     devices = c.devices.list(status=status, limit=limit, offset=offset)
     rows = [legacy_view(d) for d in devices]

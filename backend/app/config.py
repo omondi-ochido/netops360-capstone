@@ -23,6 +23,16 @@ def _env_int(name, default):
         raise ConfigError(f"{name} must be an integer.") from None
 
 
+def _env_float(name, default):
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ConfigError(f"{name} must be a number.") from None
+
+
 def _env_str(name, default=""):
     return os.environ.get(name, default).strip()
 
@@ -57,8 +67,9 @@ class Config:
         self.monitoring_enabled = True
         self.monitoring_interval_seconds = 30
         self.monitoring_workers = 8
-        self.ping_count = 3
-        self.ping_timeout_seconds = 2
+        self.ping_count = 2
+        self.ping_interval_seconds = 0.2
+        self.ping_timeout_seconds = 1
         self.partial_loss_status = "Warning"  # status for 0% < loss < 100%
 
         self.backup_schedule_seconds = 0  # 0 disables scheduled backups
@@ -99,8 +110,9 @@ class Config:
         c.monitoring_enabled = _env_bool("MONITORING_ENABLED", True)
         c.monitoring_interval_seconds = _env_int("MONITORING_INTERVAL_SECONDS", 30)
         c.monitoring_workers = _env_int("MONITORING_WORKERS", 8)
-        c.ping_count = _env_int("PING_COUNT", 3)
-        c.ping_timeout_seconds = _env_int("PING_TIMEOUT_SECONDS", 2)
+        c.ping_count = _env_int("PING_COUNT", 2)
+        c.ping_interval_seconds = _env_float("PING_INTERVAL_SECONDS", 0.2)
+        c.ping_timeout_seconds = _env_int("PING_TIMEOUT_SECONDS", 1)
         c.partial_loss_status = _env_str("PARTIAL_LOSS_STATUS", "Warning") or "Warning"
 
         c.backup_schedule_seconds = _env_int("BACKUP_SCHEDULE_SECONDS", 0)
@@ -127,6 +139,8 @@ class Config:
             problems.append("AUTH_TEST_BYPASS is allowed only in testing")
         if not 1 <= self.ping_count <= 10:
             problems.append("PING_COUNT must be between 1 and 10")
+        if not 0.2 <= self.ping_interval_seconds <= 5:
+            problems.append("PING_INTERVAL_SECONDS must be between 0.2 and 5")
         if not 1 <= self.ping_timeout_seconds <= 30:
             problems.append("PING_TIMEOUT_SECONDS must be between 1 and 30")
         if self.monitoring_interval_seconds < 5:
