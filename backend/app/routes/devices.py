@@ -22,10 +22,28 @@ def list_devices():
     status = request.args.get("status")
     if status:
         validate_status(status)
-    if (parse_bool_arg(request.args.get("refresh"), "refresh")
-            and not c.config.testing and not c.config.auth_test_bypass):
-        c.monitoring.refresh()  # rate-limited on-demand check, like the old live ping
-    devices = c.devices.list(status=status, limit=limit, offset=offset)
+    refresh_requested = (
+        parse_bool_arg(request.args.get("refresh"), "refresh")
+        and not c.config.testing and not c.config.auth_test_bypass
+    )
+    snapshot = None
+    if not c.config.testing:
+        snapshot = c.monitoring.latest_snapshot(max_age_seconds=3)
+    if refresh_requested and snapshot is None:
+        c.monitoring.refresh(
+            min_age_seconds=2, persist_async=True, use_snapshot=True,
+        )
+        snapshot = c.monitoring.latest_snapshot(max_age_seconds=3)
+        if snapshot is None:
+            snapshot = c.monitoring.latest_snapshot()
+
+    if snapshot is not None:
+        devices = snapshot["devices"]
+        if status:
+            devices = [device for device in devices if device["current_status"] == status]
+        devices = devices[offset:offset + limit]
+    else:
+        devices = c.devices.list(status=status, limit=limit, offset=offset)
     rows = [legacy_view(d) for d in devices]
     return jsonify({"data": rows, "devices": rows,
                     "count": len(devices), "pagination": {"limit": limit, "offset": offset,

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createDevice, deactivateDevice, fetchDevices, updateDevice } from "../services/deviceService";
 
 const filters = ["All", "Routers", "Switches", "Hosts", "Servers"];
@@ -15,17 +15,22 @@ function DeviceManagement({ onViewDevice }) {
   const [search, setSearch] = useState("");
   const [newDevice, setNewDevice] = useState(emptyForm);
   const [error, setError] = useState("");
+  const refreshInProgress = useRef(false);
 
   const refreshDevices = useCallback(async () => {
-    setIsLoading(true);
+    if (refreshInProgress.current) return;
+    refreshInProgress.current = true;
     try { setDevices((await fetchDevices()).devices); setError(""); }
     catch (err) { setError(err.message); }
-    finally { setIsLoading(false); }
+    finally {
+      refreshInProgress.current = false;
+      setIsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     void refreshDevices();
-    const intervalId = window.setInterval(refreshDevices, 15000);
+    const intervalId = window.setInterval(refreshDevices, 3000);
     return () => window.clearInterval(intervalId);
   }, [refreshDevices]);
 

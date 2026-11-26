@@ -20,7 +20,7 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
     };
 
     void refreshDevice();
-    const intervalId = window.setInterval(refreshDevice, 15000);
+    const intervalId = window.setInterval(refreshDevice, 5000);
     return () => {
       isMounted = false;
       window.clearInterval(intervalId);

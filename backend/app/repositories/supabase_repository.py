@@ -6,6 +6,10 @@ Raw database errors are logged (sanitised) and converted to safe AppErrors.
 """
 import logging
 import re
+import threading
+from contextlib import contextmanager
+
+import httpx
 
 from app.models.constants import ACTIVE_INCIDENT_STATUSES
 from app.utils.exceptions import ConflictError, DatabaseError, ValidationError
@@ -18,6 +22,8 @@ except ImportError:  # pragma: no cover
         pass
 
 logger = logging.getLogger(__name__)
+_EXECUTE_LOCK = threading.Lock()
+_RULE_CACHE_UNSET = object()
 
 BACKUP_META_COLUMNS = (
     "id,device_id,backup_type,status,checksum,created_at,completed_at,error_message,metadata"
@@ -25,22 +31,31 @@ BACKUP_META_COLUMNS = (
 
 
 def _execute(builder):
-    try:
-        return builder.execute()
-    except APIError as exc:
-        code = str(getattr(exc, "code", "") or "")
-        message = str(getattr(exc, "message", "") or "")[:200]
-        logger.error("Supabase API error code=%s message=%s", code, message)
-        if code == "23505":
-            raise ConflictError("A record with the same unique value already exists.") from None
-        if code == "23503":
-            raise ConflictError("The record is referenced by, or refers to, other records.") from None
-        if code in ("23514", "23502", "22P02", "22023", "22007", "22003"):
-            raise ValidationError("The data violates a database constraint.") from None
-        raise DatabaseError() from None
-    except Exception as exc:  # network errors, timeouts, bad credentials, ...
-        logger.error("Supabase request failed: %s", type(exc).__name__)
-        raise DatabaseError() from None
+    for attempt in range(2):
+        try:
+            with _EXECUTE_LOCK:
+                return builder.execute()
+        except (httpx.RemoteProtocolError, httpx.ReadError) as exc:
+            if attempt == 0:
+                logger.warning("Transient Supabase transport error (%s); retrying once",
+                               type(exc).__name__)
+                continue
+            logger.error("Supabase request failed after retry: %s", type(exc).__name__)
+            raise DatabaseError() from None
+        except APIError as exc:
+            code = str(getattr(exc, "code", "") or "")
+            message = str(getattr(exc, "message", "") or "")[:200]
+            logger.error("Supabase API error code=%s message=%s", code, message)
+            if code == "23505":
+                raise ConflictError("A record with the same unique value already exists.") from None
+            if code == "23503":
+                raise ConflictError("The record is referenced by, or refers to, other records.") from None
+            if code in ("23514", "23502", "22P02", "22023", "22007", "22003"):
+                raise ValidationError("The data violates a database constraint.") from None
+            raise DatabaseError() from None
+        except Exception as exc:  # network errors, timeouts, bad credentials, ...
+            logger.error("Supabase request failed: %s", type(exc).__name__)
+            raise DatabaseError() from None
 
 
 def _first(response):
@@ -58,6 +73,21 @@ def _rpc_row(response):
 class SupabaseRepository:
     def __init__(self, client):
         self.client = client
+        self._rule_cache = threading.local()
+
+    @contextmanager
+    def cache_enabled_rules(self):
+        previous = getattr(self._rule_cache, "enabled_rules", _RULE_CACHE_UNSET)
+        self._rule_cache.enabled_rules = None
+        try:
+            rules = self.list_rules(enabled_only=True)
+            self._rule_cache.enabled_rules = rules
+            yield rules
+        finally:
+            if previous is _RULE_CACHE_UNSET:
+                del self._rule_cache.enabled_rules
+            else:
+                self._rule_cache.enabled_rules = previous
 
     def _t(self, name):
         return self.client.table(name)
@@ -211,6 +241,10 @@ class SupabaseRepository:
 
     # ------------------------------------------------------------------ rules
     def list_rules(self, enabled_only=False, limit=None, offset=0):
+        cached_rules = getattr(self._rule_cache, "enabled_rules", _RULE_CACHE_UNSET)
+        if enabled_only and limit is None and offset == 0 and cached_rules is not _RULE_CACHE_UNSET:
+            if cached_rules is not None:
+                return cached_rules
         q = self._t("rules").select("*")
         if enabled_only:
             q = q.eq("enabled", True)

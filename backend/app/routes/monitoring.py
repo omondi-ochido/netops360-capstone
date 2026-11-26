@@ -49,5 +49,7 @@ def summary():
 @require_permission("monitoring.manage")
 def run_now():
     """Trigger an immediate check of all monitored devices."""
-    results = get_container().monitoring.run_cycle(only_due=False)
+    results = get_container().monitoring.run_cycle(
+        only_due=False, persist_async=True, use_snapshot=True,
+    )
     return ok({"checked": len(results), "results": results})

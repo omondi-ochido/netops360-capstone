@@ -227,7 +227,7 @@ class InMemoryRepository:
         row = {
             "id": str(uuid.uuid4()), "operating_system": None, "site": "main-site",
             "description": None, "ssh_enabled": False, "monitoring_enabled": True,
-            "monitoring_method": "icmp", "monitor_interval_seconds": 30,
+            "monitoring_method": "icmp", "monitor_interval_seconds": 5,
             "current_status": "Unknown", "last_latency_ms": None, "last_packet_loss": None,
             "last_checked_at": None, "last_seen_at": None, "is_active": True,
             "created_at": now, "updated_at": now,

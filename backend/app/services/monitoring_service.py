@@ -4,9 +4,8 @@ import platform
 import re
 import subprocess
 import threading
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
-
-import requests
 
 from app.models.constants import SUPPORTED_MONITORING_METHODS
 from app.utils.exceptions import ValidationError
@@ -59,59 +58,6 @@ def _result(status, **extra):
     return base
 
 
-def _check_gns3_node_status(hostname, gns3_url="http://127.0.0.1:3080"):
-    offline_result = _result(
-        "Offline", latency_ms=None, packet_loss=100.0, check_type="manual",
-    )
-    try:
-        response = requests.get(f"{gns3_url}/v2/projects", timeout=2)
-        response.raise_for_status()
-        projects = response.json()
-    except (requests.RequestException, ValueError) as exc:
-        logger.warning("GNS3 project lookup failed for %s (%s)", hostname, type(exc).__name__)
-        return offline_result
-
-    if not isinstance(projects, list):
-        logger.warning("GNS3 returned an invalid project list for %s", hostname)
-        return offline_result
-
-    opened_projects = [
-        project for project in projects
-        if isinstance(project, dict) and project.get("status") == "opened"
-    ]
-    for project in opened_projects or projects:
-        if not isinstance(project, dict):
-            continue
-        project_id = project.get("project_id") or project.get("id")
-        if not project_id:
-            continue
-        try:
-            response = requests.get(
-                f"{gns3_url}/v2/projects/{project_id}/nodes", timeout=2,
-            )
-            response.raise_for_status()
-            nodes = response.json()
-        except (requests.RequestException, ValueError) as exc:
-            logger.warning(
-                "GNS3 node lookup failed for %s (%s)", hostname, type(exc).__name__,
-            )
-            continue
-
-        if not isinstance(nodes, list):
-            continue
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            name = node.get("name")
-            if isinstance(name, str) and name.casefold() == hostname.casefold():
-                if node.get("status") == "started":
-                    return _result(
-                        "Online", latency_ms=0.5, packet_loss=0.0, check_type="manual",
-                    )
-
-    return offline_result
-
-
 def ping_host(ip, count=3, timeout=2, partial_status="Warning", runner=subprocess.run, system=None,
               interval=None):
     """Ping one host without a shell. Never raises; failures become result dicts."""
@@ -125,7 +71,7 @@ def ping_host(ip, count=3, timeout=2, partial_status="Warning", runner=subproces
 
     try:
         proc = runner(cmd, capture_output=True, text=True, shell=False,
-                      timeout=count * (timeout + 1) + 2)
+                      timeout=max(1.5, count * (timeout + 0.5)))
     except subprocess.TimeoutExpired:
         return _result("Unknown", error_message="ping command timed out")
     except FileNotFoundError:
@@ -159,14 +105,15 @@ class MonitoringService:
         self._ping = ping
         self._cycle_lock = threading.Lock()
         self._last_full_run = None
+        self._snapshot_lock = threading.Lock()
+        self._latest_snapshot = None
+        self._persistence_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="monitor-persist",
+        )
 
     # ------------------------------------------------------------- one device
     def check_device(self, device):
         """Run the check for one device. Does not persist anything."""
-        if str(device.get("device_type", "")).lower() == "switch":
-            if self.config.testing or self.config.auth_test_bypass:
-                return _result("Unmonitored", error_message="GNS3 polling is disabled in test mode")
-            return _check_gns3_node_status(device["hostname"])
         if not device.get("monitoring_enabled"):
             return _result("Unmonitored", error_message="monitoring disabled")
         method = device.get("monitoring_method")
@@ -175,9 +122,7 @@ class MonitoringService:
         if method not in SUPPORTED_MONITORING_METHODS:
             return _result("Unknown", check_type=method if method in ("tcp", "snmp") else "icmp",
                            error_message=f"unsupported monitoring method: {method}")
-        return self._ping(device["ip_address"], self.config.ping_count,
-                          self.config.ping_timeout_seconds, self.config.partial_loss_status,
-                          interval=self.config.ping_interval_seconds)
+        return self._ping(device["ip_address"], 1, 1, self.config.partial_loss_status)
 
     def record_result(self, device, result):
         """Persist the log row and refresh the device's latest-state columns."""
@@ -217,21 +162,106 @@ class MonitoringService:
         last = device.get("last_checked_at")
         if not last:
             return True
-        interval = device.get("monitor_interval_seconds") or 30
+        configured_interval = device.get("monitor_interval_seconds") or 5
+        interval = min(configured_interval, 5)
         return (now - parse_ts(last)).total_seconds() >= interval * 0.9
 
-    def run_cycle(self, only_due=True):
-        """Check every monitored device (pings in parallel, DB writes sequential)."""
-        devices = self.repo.list_devices(monitoring_enabled=None)
-        devices = [
-            device for device in devices
-            if device.get("monitoring_enabled")
-            or (
+    def latest_snapshot(self, max_age_seconds=None):
+        """Return a copy of the most recent in-memory inventory and poll results."""
+        with self._snapshot_lock:
+            snapshot = deepcopy(self._latest_snapshot)
+        if snapshot is None or max_age_seconds is None:
+            return snapshot
+        age = (utcnow() - parse_ts(snapshot["timestamp"])).total_seconds()
+        return snapshot if age < max_age_seconds else None
+
+    def _cache_snapshot(self, inventory, checked_devices, results):
+        previous = self.latest_snapshot()
+        previous_by_id = {
+            device["id"]: device for device in (previous or {}).get("devices", [])
+        }
+        snapshot_devices = []
+        for device in inventory:
+            row = dict(device)
+            if (
                 not self.config.testing
                 and not self.config.auth_test_bypass
                 and str(device.get("device_type", "")).lower() == "switch"
+            ):
+                row.update(monitoring_enabled=True, monitoring_method="icmp")
+            cached = previous_by_id.get(device["id"])
+            if cached and (
+                device.get("monitoring_enabled")
+                or str(device.get("device_type", "")).lower() == "switch"
+            ):
+                for field in ("current_status", "last_latency_ms", "last_packet_loss",
+                              "last_checked_at", "last_seen_at"):
+                    row[field] = cached.get(field)
+            snapshot_devices.append(row)
+
+        rows_by_id = {device["id"]: device for device in snapshot_devices}
+        for device, result in zip(checked_devices, results):
+            row = rows_by_id[device["id"]]
+            row.update({
+                "current_status": result["status"],
+                "last_latency_ms": result["latency_ms"],
+                "last_packet_loss": result["packet_loss"],
+                "last_checked_at": result["checked_at"],
+            })
+            if result["status"] in ("Online", "Warning"):
+                row["last_seen_at"] = result["checked_at"]
+
+        with self._snapshot_lock:
+            self._latest_snapshot = {
+                "timestamp": now_iso(),
+                "devices": snapshot_devices,
+            }
+
+    def _persist_batch(self, checked_devices, results):
+        def persist_results():
+            for device, result in zip(checked_devices, results):
+                try:
+                    self._process(device, result)
+                except Exception:
+                    logger.exception("Could not persist result for %s", device.get("hostname"))
+
+        cache_enabled_rules = getattr(self.repo, "cache_enabled_rules", None)
+        if self.evaluator is not None and callable(cache_enabled_rules):
+            try:
+                with cache_enabled_rules():
+                    persist_results()
+                return
+            except Exception:
+                logger.exception("Could not cache active rules for monitoring batch")
+        persist_results()
+
+    def run_cycle(self, only_due=True, persist_async=False, use_snapshot=False, refresh=False):
+        """Check devices in parallel and optionally persist results off-thread."""
+        if refresh:
+            snapshot = self.latest_snapshot(max_age_seconds=2)
+            if snapshot is not None:
+                return [
+                    {"device_id": device["id"], "hostname": device["hostname"],
+                     "status": device["current_status"],
+                     "latency_ms": device.get("last_latency_ms"),
+                     "packet_loss": device.get("last_packet_loss")}
+                    for device in snapshot["devices"] if device.get("monitoring_enabled")
+                ]
+        snapshot = self.latest_snapshot() if use_snapshot else None
+        inventory = (
+            snapshot["devices"] if snapshot is not None
+            else self.repo.list_devices(monitoring_enabled=None)
+        )
+        poll_switches = not self.config.testing and not self.config.auth_test_bypass
+        devices = []
+        for device in inventory:
+            is_switch = str(device.get("device_type", "")).lower() == "switch"
+            if not device.get("monitoring_enabled") and not (poll_switches and is_switch):
+                continue
+            devices.append(
+                {**device, "monitoring_enabled": True, "monitoring_method": "icmp"}
+                if poll_switches and is_switch else device
             )
-        ]
         now = utcnow()
         if only_due:
             devices = [d for d in devices if self._is_due(d, now)]
@@ -245,9 +275,18 @@ class MonitoringService:
                 logger.exception("Check crashed for %s", device.get("hostname"))
                 return _result("Unknown", error_message="check failed unexpectedly")
 
-        workers = max(1, min(self.config.monitoring_workers, len(devices)))
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ping") as pool:
+        with ThreadPoolExecutor(max_workers=12, thread_name_prefix="ping") as pool:
             results = list(pool.map(probe, devices))
+
+        self._cache_snapshot(inventory, devices, results)
+        if persist_async:
+            self._persistence_executor.submit(self._persist_batch, devices, results)
+            return [
+                {"device_id": device["id"], "hostname": device["hostname"],
+                 "status": result["status"], "latency_ms": result["latency_ms"],
+                 "packet_loss": result["packet_loss"]}
+                for device, result in zip(devices, results)
+            ]
 
         summary = []
         for device, result in zip(devices, results):
@@ -261,14 +300,19 @@ class MonitoringService:
                             "packet_loss": result["packet_loss"]})
         return summary
 
-    def refresh(self, min_age_seconds=5):
+    def refresh(self, min_age_seconds=5, persist_async=False, use_snapshot=True):
         """On-demand full check, rate-limited so dashboards cannot hammer the network."""
         with self._cycle_lock:
+            if self.latest_snapshot(max_age_seconds=2) is not None:
+                return None
             now = utcnow()
             if self._last_full_run and (now - self._last_full_run).total_seconds() < min_age_seconds:
                 return None
             self._last_full_run = now
-            return self.run_cycle(only_due=False)
+            return self.run_cycle(
+                only_due=False, persist_async=persist_async, use_snapshot=use_snapshot,
+                refresh=True,
+            )
 
     # ------------------------------------------------------------------ summary
     def summary(self):
@@ -313,7 +357,8 @@ class MonitorRunner:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="netops-monitor", daemon=True)
         self._thread.start()
-        logger.info("Monitoring loop started (tick=%ss)", self.config.monitoring_interval_seconds)
+        logger.info("Monitoring loop started (tick=%ss)",
+                    min(self.config.monitoring_interval_seconds, 5))
         return True
 
     def stop(self, timeout=5):
@@ -321,12 +366,13 @@ class MonitorRunner:
         if self._thread:
             self._thread.join(timeout)
 
-    def tick(self):
+    def tick(self, skip_monitoring=False):
         """One loop iteration; each part is isolated so one failure never stops the rest."""
-        try:
-            self.monitoring.run_cycle(only_due=True)
-        except Exception:
-            logger.exception("Monitoring cycle failed")
+        if not skip_monitoring:
+            try:
+                self.monitoring.run_cycle(only_due=True, persist_async=True)
+            except Exception:
+                logger.exception("Monitoring cycle failed")
         if self.automation is not None:
             try:
                 self.automation.retry_due()
@@ -348,6 +394,14 @@ class MonitorRunner:
             logger.exception("Scheduled backups failed")
 
     def _loop(self):
+        initial_cycle_succeeded = False
+        try:
+            self.monitoring.refresh(min_age_seconds=0, persist_async=True)
+            initial_cycle_succeeded = True
+        except Exception:
+            logger.exception("Initial monitoring cycle failed")
+        self.tick(skip_monitoring=initial_cycle_succeeded)
         while not self._stop.is_set():
-            self.tick()
-            self._stop.wait(self.config.monitoring_interval_seconds)
+            self._stop.wait(min(self.config.monitoring_interval_seconds, 5))
+            if not self._stop.is_set():
+                self.tick()

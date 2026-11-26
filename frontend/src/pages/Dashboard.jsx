@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { fetchDevices } from "../services/deviceService";
 import { fetchIncidents, fetchMonitoringHistory } from "../services/operationsService";
 
@@ -9,23 +9,44 @@ function Dashboard({ onViewDevice, onNavigate }) {
   const [error, setError] = useState("");
   const [isLive, setIsLive] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const deviceRefreshInProgress = useRef(false);
 
   const refreshDevices = useCallback(async () => {
-    setIsLoading(true);
+    if (deviceRefreshInProgress.current) return;
+    deviceRefreshInProgress.current = true;
     try {
-      const [result, history, incidentRows] = await Promise.all([
-        fetchDevices(), fetchMonitoringHistory({ limit: 12 }), fetchIncidents({ active: true, limit: 8 }),
-      ]);
-      setDevices(result.devices); setNetworkEvents(history); setIncidents(incidentRows); setIsLive(true); setError("");
+      const result = await fetchDevices();
+      setDevices(result.devices);
+      setIsLive(true);
+      setError("");
     } catch (requestError) { setError(requestError.message); }
-    finally { setIsLoading(false); }
+    finally {
+      deviceRefreshInProgress.current = false;
+      setIsLoading(false);
+    }
+  }, []);
+
+  const refreshActivity = useCallback(async () => {
+    try {
+      const [history, incidentRows] = await Promise.all([
+        fetchMonitoringHistory({ limit: 12 }), fetchIncidents({ active: true, limit: 8 }),
+      ]);
+      setNetworkEvents(history);
+      setIncidents(incidentRows);
+    } catch (requestError) { setError(requestError.message); }
   }, []);
 
   useEffect(() => {
     void refreshDevices();
-    const intervalId = window.setInterval(refreshDevices, 15000);
+    const intervalId = window.setInterval(refreshDevices, 3000);
     return () => window.clearInterval(intervalId);
   }, [refreshDevices]);
+
+  useEffect(() => {
+    void refreshActivity();
+    const intervalId = window.setInterval(refreshActivity, 15000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshActivity]);
 
   const onlineCount = devices.filter((device) => device.status === "Online").length;
   const warningCount = devices.filter((device) => device.status === "Warning").length;

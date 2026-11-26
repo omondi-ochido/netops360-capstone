@@ -65,9 +65,9 @@ class Config:
         self.automation_synchronous = False  # tests only
 
         self.monitoring_enabled = True
-        self.monitoring_interval_seconds = 30
-        self.monitoring_workers = 8
-        self.ping_count = 2
+        self.monitoring_interval_seconds = 5
+        self.monitoring_workers = 12
+        self.ping_count = 1
         self.ping_interval_seconds = 0.2
         self.ping_timeout_seconds = 1
         self.partial_loss_status = "Warning"  # status for 0% < loss < 100%
@@ -108,9 +108,9 @@ class Config:
         c.automation_backoff_seconds = _env_int("AUTOMATION_BACKOFF_SECONDS", 30)
 
         c.monitoring_enabled = _env_bool("MONITORING_ENABLED", True)
-        c.monitoring_interval_seconds = _env_int("MONITORING_INTERVAL_SECONDS", 30)
-        c.monitoring_workers = _env_int("MONITORING_WORKERS", 8)
-        c.ping_count = _env_int("PING_COUNT", 2)
+        c.monitoring_interval_seconds = _env_int("MONITORING_INTERVAL_SECONDS", 5)
+        c.monitoring_workers = _env_int("MONITORING_WORKERS", 12)
+        c.ping_count = _env_int("PING_COUNT", 1)
         c.ping_interval_seconds = _env_float("PING_INTERVAL_SECONDS", 0.2)
         c.ping_timeout_seconds = _env_int("PING_TIMEOUT_SECONDS", 1)
         c.partial_loss_status = _env_str("PARTIAL_LOSS_STATUS", "Warning") or "Warning"

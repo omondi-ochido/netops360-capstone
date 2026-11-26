@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS devices (
     ssh_enabled              boolean NOT NULL DEFAULT false,
     monitoring_enabled       boolean NOT NULL DEFAULT true,
     monitoring_method        text NOT NULL DEFAULT 'icmp',
-    monitor_interval_seconds integer NOT NULL DEFAULT 30,
+    monitor_interval_seconds integer NOT NULL DEFAULT 5,
     current_status           text NOT NULL DEFAULT 'Unknown',
     last_latency_ms          numeric(10,3),
     last_packet_loss         numeric(5,2),
