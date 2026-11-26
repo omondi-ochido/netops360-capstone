@@ -3,7 +3,9 @@ import { createDevice, deactivateDevice, fetchDevices, updateDevice } from "../s
 
 const filters = ["All", "Routers", "Switches", "Hosts", "Servers"];
 const filterTypes = { Routers: "Router", Switches: "Switch", Hosts: "Host", Servers: "Server" };
-const emptyForm = { hostname: "", ipAddress: "", deviceType: "switch", os: "", site: "main-site" };
+const emptyForm = {
+  hostname: "", ipAddress: "", deviceType: "switch", monitoringMethod: "icmp", os: "", site: "main-site",
+};
 
 function DeviceManagement({ onViewDevice }) {
   const [devices, setDevices] = useState([]);
@@ -45,9 +47,10 @@ function DeviceManagement({ onViewDevice }) {
     event.preventDefault(); setBusy(true); setError("");
     try {
       const body = { hostname: newDevice.hostname.trim(), ip_address: newDevice.ipAddress.trim(),
-        device_type: newDevice.deviceType, operating_system: newDevice.os.trim() || null, site: newDevice.site };
+        device_type: newDevice.deviceType, monitoring_method: newDevice.monitoringMethod,
+        operating_system: newDevice.os.trim() || null, site: newDevice.site };
       if (editingDevice) await updateDevice(editingDevice.id, body);
-      else await createDevice({ ...body, monitoring_method: "icmp", monitoring_enabled: true });
+      else await createDevice({ ...body, monitoring_enabled: true });
       setNewDevice(emptyForm); setEditingDevice(null); setShowForm(false); await refreshDevices();
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
@@ -55,8 +58,10 @@ function DeviceManagement({ onViewDevice }) {
 
   const startEdit = (device) => {
     const deviceType = device.deviceType.toLowerCase().replaceAll(" ", "_");
+    const monitoringMethod = device.monitoringMethod?.toLowerCase() === "tcp" ? "tcp" : "icmp";
     setEditingDevice(device);
     setNewDevice({ hostname: device.hostname, ipAddress: device.ipAddress, deviceType,
+      monitoringMethod,
       os: device.os || "", site: device.site || "main-site" });
     setShowForm(true);
   };
@@ -94,6 +99,7 @@ function DeviceManagement({ onViewDevice }) {
         <label><span>Hostname</span><input value={newDevice.hostname} onChange={(e) => setNewDevice({ ...newDevice, hostname: e.target.value })} required /></label>
         <label><span>IP address</span><input value={newDevice.ipAddress} onChange={(e) => setNewDevice({ ...newDevice, ipAddress: e.target.value })} required /></label>
         <label><span>Device type</span><select value={newDevice.deviceType} onChange={(e) => setNewDevice({ ...newDevice, deviceType: e.target.value })}>{["switch", "router", "host", "server", "firewall", "access_point", "other"].map((t) => <option key={t} value={t}>{t.replace("_", " ")}</option>)}</select></label>
+        <label><span>Monitoring protocol</span><select value={newDevice.monitoringMethod} onChange={(e) => setNewDevice({ ...newDevice, monitoringMethod: e.target.value })}><option value="icmp">ICMP</option><option value="tcp">TCP</option></select></label>
         <label><span>Operating system</span><input value={newDevice.os} onChange={(e) => setNewDevice({ ...newDevice, os: e.target.value })} /></label>
         <label><span>Site</span><input value={newDevice.site} onChange={(e) => setNewDevice({ ...newDevice, site: e.target.value })} required /></label>
         <button type="submit" className="primary-button" disabled={busy}>{busy ? "Saving..." : editingDevice ? "Update device" : "Save device"}</button>
@@ -105,10 +111,11 @@ function DeviceManagement({ onViewDevice }) {
           <input className="device-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search hostname, IP, site, or status" aria-label="Search devices" />
         </div>
         <div className="table-scroll"><table className="data-table device-table">
-          <thead><tr><th>Hostname</th><th>IP Address</th><th>Type</th><th>Site</th><th>Status</th><th>Latency</th><th>Packet loss</th><th>Monitoring</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Hostname</th><th>IP Address</th><th>Type</th><th>Site</th><th>Status</th><th>Protocol</th><th>Latency</th><th>Packet loss</th><th>Monitoring</th><th>Actions</th></tr></thead>
           <tbody>{visibleDevices.map((device) => <tr key={device.id}>
             <td>{device.hostname}</td><td>{device.ipAddress}</td><td>{device.deviceType}</td><td>{device.site}</td>
             <td><span className={`status-tag ${device.status.toLowerCase()}`}>{device.status}</span></td>
+            <td><span className="status-badge neutral">{device.monitoringMethod?.toLowerCase() === "tcp" ? "TCP" : "ICMP"}</span></td>
             <td>{Number.isFinite(device.latencyMs) ? `${device.latencyMs} ms` : "N/A"}</td>
             <td>{Number.isFinite(device.packetLoss) ? `${device.packetLoss}%` : "N/A"}</td>
             <td>{device.monitoringEnabled ? "Enabled" : "Paused"}</td>
@@ -117,7 +124,7 @@ function DeviceManagement({ onViewDevice }) {
               <button type="button" className="secondary-button small-button" disabled={busy} onClick={() => handleMonitoringToggle(device)}>{device.monitoringEnabled ? "Pause" : "Enable"}</button>
               <button type="button" className="secondary-button small-button" disabled={busy} onClick={() => handleDeactivate(device)}>Deactivate</button></td>
           </tr>)}
-          {visibleDevices.length === 0 && <tr><td colSpan="9" className="empty-table-message">{isLoading ? "Loading devices..." : error ? "Device data unavailable." : "No devices match this search."}</td></tr>}</tbody>
+          {visibleDevices.length === 0 && <tr><td colSpan="10" className="empty-table-message">{isLoading ? "Loading devices..." : error ? "Device data unavailable." : "No devices match this search."}</td></tr>}</tbody>
         </table></div>
       </section>
     </div>

@@ -157,8 +157,11 @@ def validate_device_payload(payload, *, partial=False):
             clean[key] = payload[key]
 
     if "monitoring_method" in payload:
+        method = payload["monitoring_method"]
+        if not isinstance(method, str):
+            raise ValidationError("monitoring_method must be a string.")
         clean["monitoring_method"] = validate_choice(
-            payload["monitoring_method"], MONITORING_METHODS, "monitoring_method"
+            method.strip().lower(), MONITORING_METHODS, "monitoring_method"
         )
 
     if "monitor_interval_seconds" in payload:

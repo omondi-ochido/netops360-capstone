@@ -56,6 +56,8 @@ class Config:
         self.ssh_username = ""
         self.ssh_password = ""
         self.ssh_timeout_seconds = 15
+        self.switch_ssh_username = "root"
+        self.switch_ssh_password = ""
 
         self.n8n_webhook_url = ""
         self.n8n_webhook_secret = ""
@@ -100,6 +102,8 @@ class Config:
         c.ssh_username = _env_str("NETOPS_SSH_USERNAME")
         c.ssh_password = os.environ.get("NETOPS_SSH_PASSWORD", "")
         c.ssh_timeout_seconds = _env_int("SSH_TIMEOUT_SECONDS", 15)
+        c.switch_ssh_username = _env_str("NETOPS_SWITCH_SSH_USERNAME", "root")
+        c.switch_ssh_password = os.environ.get("NETOPS_SWITCH_SSH_PASSWORD", "")
 
         c.n8n_webhook_url = _env_str("N8N_WEBHOOK_URL")
         c.n8n_webhook_secret = _env_str("N8N_WEBHOOK_SECRET")

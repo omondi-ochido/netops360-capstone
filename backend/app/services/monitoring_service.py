@@ -1,9 +1,11 @@
-"""ICMP monitoring: ping execution, result classification, persistence, scheduling."""
+"""ICMP/TCP monitoring, result classification, persistence, and scheduling."""
 import logging
 import platform
 import re
+import socket
 import subprocess
 import threading
+import time
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
@@ -56,6 +58,19 @@ def _result(status, **extra):
     }
     base.update(extra)
     return base
+
+
+def _check_tcp(ip_address: str, port: int = 22, timeout: float = 1.5):
+    start = time.perf_counter()
+    try:
+        with socket.create_connection((str(ip_address), int(port)), timeout=timeout):
+            end = time.perf_counter()
+        return _result(
+            "Online", latency_ms=round((end - start) * 1000, 2),
+            packet_loss=0, check_type="tcp",
+        )
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return _result("Offline", latency_ms=None, packet_loss=100, check_type="tcp")
 
 
 def ping_host(ip, count=3, timeout=2, partial_status="Warning", runner=subprocess.run, system=None,
@@ -116,9 +131,14 @@ class MonitoringService:
         """Run the check for one device. Does not persist anything."""
         if not device.get("monitoring_enabled"):
             return _result("Unmonitored", error_message="monitoring disabled")
-        method = device.get("monitoring_method")
+        method = str(device.get("monitoring_method") or "ICMP").strip().lower()
         if method == "none":
             return _result("Unmonitored", error_message="device has no monitoring method")
+        if method == "tcp":
+            port = device.get("monitor_port") or device.get("port") or 22
+            return _check_tcp(device["ip_address"], port)
+        if method == "ping":
+            method = "icmp"
         if method not in SUPPORTED_MONITORING_METHODS:
             return _result("Unknown", check_type=method if method in ("tcp", "snmp") else "icmp",
                            error_message=f"unsupported monitoring method: {method}")
@@ -188,7 +208,11 @@ class MonitoringService:
                 and not self.config.auth_test_bypass
                 and str(device.get("device_type", "")).lower() == "switch"
             ):
-                row.update(monitoring_enabled=True, monitoring_method="icmp")
+                method = str(device.get("monitoring_method") or "icmp").strip().lower()
+                row.update(
+                    monitoring_enabled=True,
+                    monitoring_method=method if method in ("icmp", "ping", "tcp") else "icmp",
+                )
             cached = previous_by_id.get(device["id"])
             if cached and (
                 device.get("monitoring_enabled")
@@ -258,8 +282,13 @@ class MonitoringService:
             is_switch = str(device.get("device_type", "")).lower() == "switch"
             if not device.get("monitoring_enabled") and not (poll_switches and is_switch):
                 continue
+            method = str(device.get("monitoring_method") or "icmp").strip().lower()
             devices.append(
-                {**device, "monitoring_enabled": True, "monitoring_method": "icmp"}
+                {
+                    **device,
+                    "monitoring_enabled": True,
+                    "monitoring_method": method if method in ("icmp", "ping", "tcp") else "icmp",
+                }
                 if poll_switches and is_switch else device
             )
         now = utcnow()

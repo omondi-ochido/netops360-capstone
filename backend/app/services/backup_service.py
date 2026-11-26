@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 CONFIG_COMMAND = "show configuration commands"
 INTERFACES_COMMAND = "show interfaces"
+SWITCH_COMMANDS = (
+    ("=== INTERFACE & BRIDGE CONFIG ===", "cat /etc/network/interfaces"),
+    ("=== ACTIVE PORTS ===", "brctl show 2>/dev/null || ovs-vsctl show 2>/dev/null"),
+    ("=== IP ADDRESSES ===", "ip addr"),
+    ("=== ROUTING TABLE ===", "ip route"),
+)
 
 
 class BackupFailedError(ExternalServiceError):
@@ -51,26 +57,55 @@ class BackupService:
     def run_backup(self, identifier, backup_type="manual"):
         validate_choice(backup_type, BACKUP_TYPES, "backup_type")
         device = resolve_device(self.repo, identifier)
-        if not device.get("ssh_enabled"):
+        is_switch = str(device.get("device_type", "")).lower() == "switch"
+        is_router = str(device.get("device_type", "")).lower() == "router"
+        if not device.get("ssh_enabled") and not (is_router or is_switch):
             raise ValidationError("SSH is not enabled for this device.")
-        if not (self.config.ssh_username and self.config.ssh_password):
+        username = self.config.switch_ssh_username if is_switch else self.config.ssh_username
+        password = self.config.switch_ssh_password if is_switch else self.config.ssh_password
+        if not (username and password):
+            credential_names = (
+                "NETOPS_SWITCH_SSH_USERNAME / NETOPS_SWITCH_SSH_PASSWORD"
+                if is_switch else "NETOPS_SSH_USERNAME / NETOPS_SSH_PASSWORD"
+            )
             raise ServiceUnavailableError(
-                "SSH credentials are not configured (NETOPS_SSH_USERNAME / NETOPS_SSH_PASSWORD).",
+                f"SSH credentials are not configured ({credential_names}).",
                 code="ssh_not_configured",
             )
 
         started = now_iso()
         try:
             conn = self._connect(
-                device_type="vyos", host=device["ip_address"],
-                username=self.config.ssh_username, password=self.config.ssh_password,
+                device_type="linux" if is_switch else "vyos", host=device["ip_address"],
+                username=username, password=password,
                 timeout=self.config.ssh_timeout_seconds,
                 conn_timeout=self.config.ssh_timeout_seconds,
                 auth_timeout=self.config.ssh_timeout_seconds,
             )
             try:
-                configuration = conn.send_command(CONFIG_COMMAND)
-                interfaces = conn.send_command(INTERFACES_COMMAND)
+                if is_switch:
+                    section_outputs = [
+                        (header, command, conn.send_command(command))
+                        for header, command in SWITCH_COMMANDS
+                    ]
+                    configuration = "\n\n".join(
+                        f"{header}\n{output if isinstance(output, str) else ''}"
+                        for header, _, output in section_outputs
+                    )
+                    interfaces = next(
+                        (output for header, _, output in section_outputs
+                         if header == "=== IP ADDRESSES ==="), None,
+                    )
+                    commands = [command for _, command, _ in section_outputs]
+                    has_configuration = any(
+                        isinstance(output, str) and output.strip()
+                        for _, _, output in section_outputs
+                    )
+                else:
+                    configuration = conn.send_command(CONFIG_COMMAND)
+                    interfaces = conn.send_command(INTERFACES_COMMAND)
+                    commands = [CONFIG_COMMAND, INTERFACES_COMMAND]
+                    has_configuration = isinstance(configuration, str) and bool(configuration.strip())
             finally:
                 try:
                     conn.disconnect()
@@ -84,7 +119,7 @@ class BackupService:
             self._record_failure(device, backup_type, message, {"error_type": kind})
             raise BackupFailedError(message, details={"reason": kind}) from None
 
-        if not isinstance(configuration, str) or not configuration.strip():
+        if not has_configuration:
             message = "The device returned an empty configuration."
             row = self._record_failure(device, backup_type, message, {"error_type": "empty_configuration"})
             raise BackupFailedError(message, details={"reason": "empty_configuration",
@@ -100,7 +135,7 @@ class BackupService:
             "created_at": started, "completed_at": now_iso(),
             "metadata": {"changed": changed, "previous_backup_id": previous["id"] if previous else None,
                          "config_lines": len(configuration.splitlines()),
-                         "commands": [CONFIG_COMMAND, INTERFACES_COMMAND]},
+                         "commands": commands},
         })
         return {"success": True, "changed": changed, "backup": safe_backup_view(row),
                 "configuration": configuration, "interfaces": interfaces}
