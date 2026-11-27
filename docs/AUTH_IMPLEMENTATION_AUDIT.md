@@ -1,5 +1,7 @@
 # Authentication, Authorization and User Management Audit
 
+> **Follow-up:** The original audit records the pre-company-registration implementation. The current company registration behavior and remaining multi-tenant limitations are documented in [COMPANY_AUTHENTICATION_AUDIT.md](COMPANY_AUTHENTICATION_AUDIT.md) and [AUTH_SETUP.md](AUTH_SETUP.md). In particular, public identities are no longer provisioned as global roles and the atomic company-registration migration is separate from the historical migrations below.
+
 This is the baseline audit for the state before the auth implementation. Current implementation and setup notes are recorded at the end.
 
 ## Existing implementation

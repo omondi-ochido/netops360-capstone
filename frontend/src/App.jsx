@@ -7,6 +7,7 @@ import AuthCallback from "./pages/AuthCallback";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import AcceptInvite from "./pages/AcceptInvite";
+import CompanyOnboarding from "./pages/CompanyOnboarding";
 import Dashboard from "./pages/Dashboard";
 import DeviceManagement from "./pages/DeviceManagement";
 import DeviceDetails from "./pages/DeviceDetails";
@@ -14,15 +15,30 @@ import AlertsAndIncidents from "./pages/AlertsAndIncidents";
 import MonitoringRules from "./pages/MonitoringRules";
 import AutomationManagement from "./pages/AutomationManagement";
 import UserManagement from "./pages/UserManagement";
+import SecurityCenter from "./pages/SecurityCenter";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 
 function ProtectedApp() {
-  const { user, loading, hasPermission, logout } = useAuth();
+  const { user, roles, permissions, loading, onboardingRequired, invitationRequired, mfaRequired, hasPermission, logout } = useAuth();
   const [activePage, setActivePage] = useState("dashboard"); const [selectedDevice, setSelectedDevice] = useState(null); const navigate = useNavigate();
+  const signOutPendingCompany = async () => {
+    try { await logout(); } catch { /* leave the blocked company session and return to login */ }
+    navigate("/login", { replace: true });
+  };
   if (loading) return <div className="login-page" role="status">Loading your account…</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (onboardingRequired) return <Navigate to="/company-onboarding" replace />;
+  if (invitationRequired) return <Navigate to="/accept-invite" replace />;
+  if (mfaRequired) return <Navigate to="/security" replace />;
+  if (roles.includes("company_admin") && permissions.length === 0) {
+    return <main className="login-page"><section className="login-card" role="status">
+      <h1>Company registered</h1>
+      <p>Your Company Admin account is ready. Workspace access will be enabled after company-scoped permissions are configured.</p>
+      <button type="button" className="secondary-button" onClick={() => void signOutPendingCompany()}>Sign out</button>
+    </section></main>;
+  }
   const openDevice = (device) => { setSelectedDevice(device); setActivePage("device-details"); };
-  const titleMap = { dashboard: "Dashboard", devices: "Device Management", "device-details": "Device Details", alerts: "Alerts & Incidents", monitoring: "Monitoring Rules", automation: "Automation Management", users: "User Management" };
+  const titleMap = { dashboard: "Dashboard", devices: "Device Management", "device-details": "Device Details", alerts: "Alerts & Incidents", monitoring: "Monitoring Rules", automation: "Automation Management", users: "User Management", security: "Security" };
   const allowed = { devices: "devices.read", alerts: "incidents.read", monitoring: "rules.read", automation: "automation.read", users: "users.read" };
   const visiblePage = allowed[activePage] && !hasPermission(allowed[activePage]) ? "dashboard" : activePage;
   const render = () => {
@@ -33,13 +49,14 @@ function ProtectedApp() {
     if (visiblePage === "monitoring") return <MonitoringRules />;
     if (visiblePage === "automation") return <AutomationManagement />;
     if (visiblePage === "users") return <UserManagement />;
+    if (visiblePage === "security") return <SecurityCenter embedded />;
     return <Dashboard onViewDevice={openDevice} onNavigate={setActivePage} />;
   };
   return <Layout title={titleMap[visiblePage] || "Dashboard"} activePage={visiblePage === "device-details" ? "devices" : visiblePage} onNavigate={(page) => { if (!allowed[page] || hasPermission(allowed[page])) setActivePage(page); }} onLogout={async () => { await logout(); navigate("/login", { replace: true }); }}>{render()}</Layout>;
 }
 
 function AppRoutes() {
-  const { user, loading } = useAuth();
+  const { user, loading, onboardingRequired } = useAuth();
   return <Routes>
     <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
     <Route path="/signup" element={user ? <Navigate to="/" replace /> : <SignUp />} />
@@ -47,6 +64,8 @@ function AppRoutes() {
     <Route path="/forgot-password" element={<ForgotPassword />} />
     <Route path="/reset-password" element={<ResetPassword />} />
     <Route path="/accept-invite" element={<AcceptInvite />} />
+    <Route path="/security" element={loading ? <div className="login-page" role="status">Loading your account…</div> : user ? <SecurityCenter /> : <Navigate to="/login" replace />} />
+    <Route path="/company-onboarding" element={loading ? <div className="login-page" role="status">Loading your account…</div> : user && onboardingRequired ? <CompanyOnboarding /> : user ? <Navigate to="/" replace /> : <Navigate to="/login" replace />} />
     <Route path="/*" element={loading ? <div className="login-page" role="status">Loading your account…</div> : user ? <ProtectedApp /> : <Navigate to="/login" replace />} />
   </Routes>;
 }

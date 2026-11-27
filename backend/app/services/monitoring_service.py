@@ -411,7 +411,7 @@ class MonitorRunner:
 
     def _maybe_scheduled_backups(self):
         every = self.config.backup_schedule_seconds
-        if not every or self.backups is None:
+        if not every or self.backups is None or self.config.n8n_backup_api_token:
             return
         now = utcnow()
         if self._last_scheduled_backup and (now - self._last_scheduled_backup).total_seconds() < every:

@@ -41,7 +41,9 @@ class Container:
         self.backups = BackupService(repo, config)
         self.monitor_runner = MonitorRunner(self.monitoring, config,
                                             automation=self.automation, backups=self.backups)
-        if config.backup_on_critical_incident:
+        # When the scoped n8n API token is enabled, n8n owns event-driven runs.
+        # The Flask hook remains available as the standalone fallback otherwise.
+        if config.backup_on_critical_incident and not config.n8n_backup_api_token:
             self.incidents.on_opened.append(self._backup_on_critical)
 
     def _backup_on_critical(self, incident, device, rule):

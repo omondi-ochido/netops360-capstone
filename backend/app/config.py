@@ -51,6 +51,10 @@ class Config:
         self.supabase_jwt_issuer = ""
         self.supabase_jwt_audience = "authenticated"
         self.auth_test_bypass = False
+        self.auth_registration_limit = 5
+        self.auth_registration_window_seconds = 3600
+        self.auth_invitation_limit = 30
+        self.auth_invitation_window_seconds = 3600
         self.frontend_url = "http://localhost:5173"
 
         self.ssh_username = ""
@@ -61,6 +65,7 @@ class Config:
 
         self.n8n_webhook_url = ""
         self.n8n_webhook_secret = ""
+        self.n8n_backup_api_token = ""
         self.automation_timeout_seconds = 10
         self.automation_max_retries = 5
         self.automation_backoff_seconds = 30
@@ -97,6 +102,10 @@ class Config:
         c.supabase_jwt_issuer = _env_str("SUPABASE_JWT_ISSUER", f"{c.supabase_url.rstrip('/')}/auth/v1" if c.supabase_url else "")
         c.supabase_jwt_audience = _env_str("SUPABASE_JWT_AUDIENCE", "authenticated")
         c.auth_test_bypass = _env_bool("AUTH_TEST_BYPASS", False)
+        c.auth_registration_limit = _env_int("AUTH_REGISTRATION_LIMIT", 5)
+        c.auth_registration_window_seconds = _env_int("AUTH_REGISTRATION_WINDOW_SECONDS", 3600)
+        c.auth_invitation_limit = _env_int("AUTH_INVITATION_LIMIT", 30)
+        c.auth_invitation_window_seconds = _env_int("AUTH_INVITATION_WINDOW_SECONDS", 3600)
         c.frontend_url = _env_str("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 
         c.ssh_username = _env_str("NETOPS_SSH_USERNAME")
@@ -107,6 +116,7 @@ class Config:
 
         c.n8n_webhook_url = _env_str("N8N_WEBHOOK_URL")
         c.n8n_webhook_secret = _env_str("N8N_WEBHOOK_SECRET")
+        c.n8n_backup_api_token = _env_str("N8N_BACKUP_API_TOKEN")
         c.automation_timeout_seconds = _env_int("AUTOMATION_TIMEOUT_SECONDS", 10)
         c.automation_max_retries = _env_int("AUTOMATION_MAX_RETRIES", 5)
         c.automation_backoff_seconds = _env_int("AUTOMATION_BACKOFF_SECONDS", 30)
@@ -145,6 +155,10 @@ class Config:
             problems.append("PING_COUNT must be between 1 and 10")
         if not 0.2 <= self.ping_interval_seconds <= 5:
             problems.append("PING_INTERVAL_SECONDS must be between 0.2 and 5")
+        if self.auth_registration_limit < 1 or self.auth_invitation_limit < 1:
+            problems.append("Auth rate limits must be positive")
+        if self.auth_registration_window_seconds < 1 or self.auth_invitation_window_seconds < 1:
+            problems.append("Auth rate limit windows must be positive")
         if not 1 <= self.ping_timeout_seconds <= 30:
             problems.append("PING_TIMEOUT_SECONDS must be between 1 and 30")
         if self.monitoring_interval_seconds < 5:
@@ -155,6 +169,8 @@ class Config:
             problems.append("PARTIAL_LOSS_STATUS must be 'Online' or 'Warning'")
         if self.automation_max_retries < 0:
             problems.append("AUTOMATION_MAX_RETRIES must be 0 or greater")
+        if self.n8n_backup_api_token and len(self.n8n_backup_api_token) < 32:
+            problems.append("N8N_BACKUP_API_TOKEN must contain at least 32 characters")
         if "*" in self.cors_origins:
             problems.append("CORS_ALLOWED_ORIGINS must list explicit origins, not '*'")
         if problems:

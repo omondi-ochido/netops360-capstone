@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentIdentity, revokeCurrentSession, signIn } from "../services/authService.js";
+import { clearPendingCompanyRegistration, getCurrentIdentity, revokeCurrentSession, signIn } from "../services/authService.js";
 import { getSupabaseClient, supabaseConfigured } from "../services/supabaseClient.js";
+import { apiRequest } from "../services/api.js";
 
 const AuthContext = createContext(null);
 
@@ -9,6 +10,7 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const generation = useRef(0);
+  const auditedSessions = useRef(new Set());
 
   const clearIdentity = useCallback((message = "") => {
     generation.current += 1;
@@ -19,7 +21,11 @@ export function AuthProvider({ children }) {
     const current = ++generation.current;
     try {
       const result = await getCurrentIdentity();
-      if (generation.current === current) { setIdentity(result); setError(""); setLoading(false); }
+      if (generation.current === current) {
+        setIdentity(result);
+        if (!result?.onboarding_required) clearPendingCompanyRegistration();
+        setError(""); setLoading(false);
+      }
       return result;
     } catch (requestError) {
       if (generation.current === current) {
@@ -40,6 +46,14 @@ export function AuthProvider({ children }) {
       if (event === "SIGNED_OUT" || !session) {
         clearIdentity("");
       } else if (["INITIAL_SESSION", "SIGNED_IN", "TOKEN_REFRESHED", "USER_UPDATED"].includes(event)) {
+        if (event === "SIGNED_IN" && session?.access_token) {
+          let sessionId = "";
+          try { sessionId = JSON.parse(atob(session.access_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).session_id || ""; } catch { /* malformed tokens are rejected by Flask */ }
+          if (sessionId && !auditedSessions.current.has(sessionId)) {
+            auditedSessions.current.add(sessionId);
+            window.setTimeout(() => { void apiRequest("/api/auth/security-events", { method: "POST", body: JSON.stringify({ event: "login_succeeded" }) }).catch(() => {}); }, 0);
+          }
+        }
         setLoading(true);
         window.setTimeout(() => { void loadIdentity(); }, 0);
       }
@@ -73,6 +87,9 @@ export function AuthProvider({ children }) {
   const permissions = identity?.permissions || [];
   const value = useMemo(() => ({
     user: identity?.user || null,
+    onboardingRequired: Boolean(identity?.onboarding_required),
+    invitationRequired: Boolean(identity?.invitation_required),
+    mfaRequired: Boolean(identity?.mfa_required),
     roles: identity?.roles || [],
     permissions,
     loading,
@@ -80,7 +97,8 @@ export function AuthProvider({ children }) {
     login,
     logout,
     hasPermission: (permission) => permissions.includes("*") || permissions.includes(permission),
-  }), [identity, permissions, loading, error, login, logout]);
+    refreshIdentity: loadIdentity,
+  }), [identity, permissions, loading, error, login, logout, loadIdentity]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

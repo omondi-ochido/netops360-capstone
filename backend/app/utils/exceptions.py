@@ -44,6 +44,12 @@ class ConflictError(AppError):
     default_message = "The request conflicts with the current state."
 
 
+class RateLimitError(AppError):
+    status_code = 429
+    code = "rate_limited"
+    default_message = "Too many requests. Try again later."
+
+
 class DatabaseError(AppError):
     status_code = 503
     code = "database_unavailable"

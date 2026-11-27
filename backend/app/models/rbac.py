@@ -9,6 +9,14 @@ ROLE_PERMISSIONS = {
         "backups.create", "users.read", "users.create", "users.update", "users.suspend",
         "roles.read", "roles.assign", "audit.read",
     },
+    # Operational permissions are withheld until every operational query is
+    # tenant-scoped. User administration is company-scoped in UserService.
+    "company_admin": {
+        "users.read", "users.create", "users.update", "users.suspend",
+        "roles.read", "roles.assign", "audit.read",
+        "devices.read", "monitoring.read", "rules.read", "incidents.read",
+        "automation.read", "backups.read",
+    },
     "network_operator": {
         "devices.read", "monitoring.read", "monitoring.manage", "rules.read",
         "incidents.read", "incidents.acknowledge", "incidents.resolve",

@@ -52,6 +52,26 @@ def test_successful_backup_is_persisted_with_sha256(client, repo, dev, ssh):
     assert ssh["conns"][0].disconnected is True
 
 
+def test_switch_backup_requires_configuration_not_only_runtime_diagnostics(container, client, repo, dev):
+    switch = dev("SW1")
+    repo.update_device(switch["id"], {"ssh_enabled": True})
+    container.config.switch_ssh_username = "switch-user"
+    container.config.switch_ssh_password = "switch-password"
+
+    class SwitchConn:
+        def send_command(self, command):
+            return {"cat /etc/network/interfaces": "", "brctl show 2>/dev/null || ovs-vsctl show 2>/dev/null": "",
+                    "ip addr": "eth0: inet 192.0.2.1/24", "ip route": "default via 192.0.2.254"}[command]
+        def disconnect(self):
+            pass
+
+    container.backups._connect = lambda **kwargs: SwitchConn()
+    response = client.post("/api/devices/SW1/backup")
+    assert response.status_code == 502
+    assert response.get_json()["error"]["details"]["reason"] == "empty_configuration"
+    assert repo.list_backups(device_id=switch["id"])[0]["status"] == "failed"
+
+
 def test_credentials_come_from_config_not_code(container, client, ssh):
     client.post("/api/devices/main-rtr/backup")
     kwargs = ssh["kwargs"][0]
@@ -155,3 +175,92 @@ def test_scheduled_backups_only_touch_ssh_devices(container, repo, ssh):
     results = container.backups.run_scheduled_backups()
     assert results == [("main-rtr", "success")]
     assert next(iter(repo.backups.values()))["backup_type"] == "scheduled"
+
+
+def test_scheduled_backup_failure_does_not_stop_other_devices(container, repo, dev):
+    from app.utils.exceptions import ExternalServiceError
+
+    repo.update_device(dev("SW1")["id"], {"ssh_enabled": True})
+    attempted = []
+
+    def run(identifier, backup_type):
+        device = repo.get_device(identifier)
+        attempted.append(device["hostname"])
+        if device["hostname"] == "main-rtr":
+            raise ExternalServiceError("temporary device failure")
+        return {"success": True}
+
+    container.backups.run_backup = run
+    results = container.backups.run_scheduled_backups()
+    assert attempted == ["main-rtr", "SW1"]
+    assert results == [("main-rtr", "external_service_error"), ("SW1", "success")]
+
+
+def test_scoped_n8n_token_lists_devices_and_records_metadata_only_backup(make_app, repo, container, ssh, dev):
+    token = "long-random-machine-token-with-32-plus-characters"
+    app = make_app(auth_test_bypass=False, n8n_backup_api_token=token)
+    app.extensions["netops"].backups._connect = container.backups._connect
+    client = app.test_client()
+
+    assert client.get("/api/devices", headers={"Authorization": "Bearer " + token}).status_code == 200
+    assert client.get("/api/devices", headers={"Authorization": "Bearer wrong-token"}).status_code == 401
+    assert client.get("/api/backups", headers={"Authorization": "Bearer " + token}).status_code == 401
+
+    response = client.post(
+        f"/api/devices/{dev('main-rtr')['id']}/backup",
+        json={"backup_type": "scheduled"},
+        headers={"Authorization": "Bearer " + token, "X-N8N-Execution-Id": "schedule-exec-1"},
+    )
+    assert response.status_code == 201
+    data = response.get_json()["data"]
+    assert data["backup"]["backup_type"] == "scheduled"
+    assert "configuration" not in data
+    assert data["automation_log_id"]
+    log = repo.get_automation_log(data["automation_log_id"])
+    assert log["status"] == "success" and log["execution_id"] == "schedule-exec-1"
+    assert log["response_payload"]["checksum"] == data["backup"]["checksum"]
+
+
+def test_n8n_incident_backup_repeated_event_is_deduplicated(make_app, repo, container, dev, rule, ssh):
+    token = "long-random-machine-token-with-32-plus-characters"
+    app = make_app(auth_test_bypass=False, n8n_backup_api_token=token)
+    app.extensions["netops"].backups._connect = container.backups._connect
+    client = app.test_client()
+    incident, _ = repo.open_incident(
+        dev("main-rtr")["id"], rule("Device Offline")["id"], "Router offline", "Offline",
+        "critical", "device_status", "Offline",
+    )
+    headers = {"Authorization": "Bearer " + token, "X-N8N-Execution-Id": "event-exec-1"}
+    payload = {"backup_type": "incident_triggered", "incident_id": incident["id"]}
+    path = f"/api/devices/{dev('main-rtr')['id']}/backup"
+    first = client.post(path, json=payload, headers=headers)
+    second = client.post(path, json=payload, headers=headers)
+    assert first.status_code == 201 and second.status_code == 200
+    assert second.get_json()["data"]["duplicate"] is True
+    assert len(repo.list_backups(device_id=dev("main-rtr")["id"])) == 1
+    assert len([x for x in repo.list_automation_logs() if x["trigger_type"] == "backup.incident_triggered"]) == 1
+
+
+def test_n8n_scheduled_retry_reuses_execution_log(make_app, repo, container, dev, ssh):
+    token = "long-random-machine-token-with-32-plus-characters"
+    app = make_app(auth_test_bypass=False, n8n_backup_api_token=token)
+    app.extensions["netops"].backups._connect = container.backups._connect
+    client = app.test_client()
+    calls = {"count": 0}
+    connect = container.backups._connect
+
+    def temporary_timeout(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise netmiko_exc.NetmikoTimeoutException("temporary connection timeout")
+        return connect(**kwargs)
+
+    app.extensions["netops"].backups._connect = temporary_timeout
+    headers = {"Authorization": "Bearer " + token, "X-N8N-Execution-Id": "schedule-retry-1"}
+    path = f"/api/devices/{dev('main-rtr')['id']}/backup"
+    first = client.post(path, json={"backup_type": "scheduled"}, headers=headers)
+    second = client.post(path, json={"backup_type": "scheduled"}, headers=headers)
+    assert first.status_code == 502 and second.status_code == 201
+    log = repo.list_automation_logs(device_id=dev("main-rtr")["id"], limit=10)[0]
+    assert log["status"] == "success" and log["retry_count"] == 1
+    assert len(repo.list_backups(device_id=dev("main-rtr")["id"])) == 2

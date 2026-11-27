@@ -1,20 +1,21 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from app.extensions import get_container
 from app.services.backup_service import safe_backup_view
-from app.services.device_service import legacy_view
-from app.utils.auth import require_permission
-from app.utils.responses import ok, ok_list
+from app.services.device_service import legacy_view, resolve_device
+from app.utils.auth import require_backup_automation, require_permission
+from app.utils.exceptions import AppError, ConflictError, ValidationError
+from app.utils.responses import error_response, ok, ok_list
 from app.utils.timeutil import now_iso
 from app.utils.validators import (
-    json_body, parse_bool_arg, parse_pagination, validate_status,
+    json_body, parse_bool_arg, parse_pagination, validate_choice, validate_status, validate_uuid,
 )
 
 bp = Blueprint("devices", __name__, url_prefix="/api/devices")
 
 
 @bp.get("", strict_slashes=False)
-@require_permission("devices.read")
+@require_backup_automation("devices.read")
 def list_devices():
     """Backward compatible: {"devices": [...], "timestamp": "..."}."""
     c = get_container()
@@ -87,10 +88,87 @@ def delete_device(device_id):
 
 
 @bp.post("/<device_id>/backup")
-@require_permission("backups.create")
+@require_backup_automation("backups.create")
 def backup_device(device_id):
     c = get_container()
-    result = c.backups.run_backup(device_id, "manual")
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict) or set(data) - {"backup_type", "incident_id"}:
+        raise ValidationError("Backup request contains unsupported fields.")
+    machine = bool(getattr(g, "backup_automation_token", False))
+    backup_type = data.get("backup_type", "manual")
+    if not machine and backup_type != "manual":
+        raise ValidationError("Only the backup automation token may request scheduled or incident backups.")
+    validate_choice(backup_type, ("manual", "scheduled", "incident_triggered"), "backup_type")
+    device = resolve_device(c.repo, device_id)
+    execution_id = request.headers.get("X-N8N-Execution-Id", "")[:200] or None
+    incident_id = data.get("incident_id")
+    if backup_type == "incident_triggered":
+        incident_id = validate_uuid(incident_id, "incident_id")
+        incident = c.repo.get_incident(incident_id)
+        if not incident or incident.get("device_id") != device["id"]:
+            raise ValidationError("incident_id must reference an incident for this device.")
+    elif incident_id is not None:
+        raise ValidationError("incident_id is only valid for incident_triggered backups.")
+
+    log = None
+    if machine:
+        trigger_type = f"backup.{backup_type}"
+        if execution_id:
+            log = c.repo.find_automation_log_for_execution(execution_id, device["id"], trigger_type)
+        if log and log["status"] == "success":
+            backup_id = (log.get("response_payload") or {}).get("backup_id")
+            backup = c.repo.get_backup(backup_id) if backup_id else None
+            return ok({"success": True, "duplicate": True, "changed": (log.get("response_payload") or {}).get("changed", False),
+                       "backup": safe_backup_view(backup) if backup else None,
+                       "automation_log_id": log["id"]}, 200)
+        if log and log["status"] == "running":
+            raise ConflictError("This n8n execution already has a backup in progress.")
+        if log and log["status"] == "failed":
+            if log.get("retry_count", 0) >= 2:
+                raise ConflictError("The retry limit for this workflow execution has been reached.")
+            log = c.repo.update_automation_log(log["id"], {
+                "status": "running", "started_at": now_iso(), "completed_at": None,
+                "retry_count": log.get("retry_count", 0) + 1, "error_message": None,
+            })
+        if backup_type == "incident_triggered" and not log:
+            previous = c.repo.find_automation_log(incident_id, trigger_type)
+            if previous:
+                backup_id = (previous.get("response_payload") or {}).get("backup_id")
+                backup = c.repo.get_backup(backup_id) if backup_id else None
+                summary = {"success": previous["status"] == "success", "duplicate": True,
+                           "automation_log_id": previous["id"], "backup": safe_backup_view(backup) if backup else None}
+                return ok(summary, 200)
+        if not log:
+            log = c.repo.insert_automation_log({
+                "workflow_name": "n8n-config-backup", "trigger_type": trigger_type,
+                "incident_id": incident_id, "device_id": device["id"], "rule_id": None,
+                "execution_id": execution_id, "status": "running", "started_at": now_iso(),
+                "request_payload": {"backup_type": backup_type, "incident_id": incident_id,
+                                    "device_id": device["id"], "device_hostname": device["hostname"]},
+            })
+    try:
+        result = c.backups.run_backup(device["id"], backup_type)
+    except AppError as exc:
+        if log:
+            c.repo.update_automation_log(log["id"], {
+                "status": "failed", "completed_at": now_iso(), "error_message": exc.code,
+                "response_payload": {"error_code": exc.code,
+                                     "reason": (exc.details or {}).get("reason"),
+                                     "backup_id": (exc.details or {}).get("backup_id")},
+            })
+        return error_response(exc.status_code, exc.code, exc.message, exc.details)
+
+    if log:
+        c.repo.update_automation_log(log["id"], {
+            "status": "success", "completed_at": now_iso(),
+            "response_payload": {"backup_id": result["backup"]["id"], "status": "success",
+                                 "checksum": result["backup"]["checksum"],
+                                 "changed": result["changed"]},
+        })
+        return ok({"success": True, "changed": result["changed"],
+                   "backup": result["backup"], "automation_log_id": log["id"]}, 201)
     return ok(result, 201)
 
 

@@ -52,7 +52,7 @@ def test_incident_opened_event_is_delivered_and_logged(container, repo, dev, htt
     trigger_offline(container, dev)
     logs = repo.list_automation_logs(limit=100)
     assert len(logs) == 2  # one per opened incident (offline + packet loss)
-    assert all(l["status"] == "success" and l["trigger_type"] == "incident.opened" for l in logs)
+    assert all(l["status"] == "running" and l["trigger_type"] == "incident.opened" for l in logs)
     log = next(l for l in logs if l["request_payload"]["rule"]["name"] == "Device Offline")
     assert log["execution_id"] == "exec-42" and log["response_payload"]["status_code"] == 200
     assert log["incident_id"] and log["device_id"] == dev("PC1")["id"]
@@ -69,6 +69,7 @@ def test_request_is_signed_and_uses_configured_timeout(container, dev, http):
     call = http.calls[0]
     expected = hmac.new(b"whsec", call["data"], hashlib.sha256).hexdigest()
     assert call["headers"]["X-NetOps-Signature"] == f"sha256={expected}"
+    assert call["headers"]["X-NetOps-Webhook-Token"] == "whsec"
     assert call["headers"]["X-NetOps-Event"] == "incident.opened"
     assert call["url"] == URL and call["timeout"] == container.config.automation_timeout_seconds
     assert b"whsec" not in call["data"]  # the secret is never part of the payload
@@ -153,8 +154,8 @@ def test_manual_retry_endpoint(client, container, repo, dev, http):
     resp = client.post(f"/api/automation/retry/{failed['id']}")
     assert resp.status_code == 202
     after = repo.get_automation_log(failed["id"])
-    assert after["status"] == "success" and after["retry_count"] == 1
-    assert client.post(f"/api/automation/retry/{failed['id']}").status_code == 409  # already ok
+    assert after["status"] == "running" and after["retry_count"] == 1
+    assert client.post(f"/api/automation/retry/{failed['id']}").status_code == 409  # awaiting callback
     assert client.post("/api/automation/retry/not-a-uuid").status_code == 400
     assert client.post("/api/automation/retry/5b3b5b3b-5b3b-4b3b-8b3b-5b3b5b3b5b3b").status_code == 404
 
@@ -175,7 +176,7 @@ def test_retry_due_honours_backoff_and_max_retries(container, repo, dev, http):
     container.config.automation_backoff_seconds = 0
     http.behaviour = lambda: Resp(200)
     assert container.automation.retry_due() == 2
-    assert all(l["status"] == "success" for l in repo.list_automation_logs(limit=100))
+    assert all(l["status"] == "running" for l in repo.list_automation_logs(limit=100))
     assert container.automation.retry_due() == 0  # nothing left to retry
 
 
@@ -199,3 +200,62 @@ def test_automation_logs_api_filters_and_auth(make_app, container, repo, dev, ht
     assert c.get("/api/automation/logs?status=bogus").status_code == 400
     assert c.get("/api/automation/logs?incident_id=zzz").status_code == 400
     assert c.post("/api/automation/retry/x").status_code == 400
+
+
+def test_callback_completes_original_log_and_replay_is_idempotent(client, container, repo, dev, http):
+    trigger_offline(container, dev)
+    log = repo.list_automation_logs(limit=1)[0]
+    body = json.dumps({"automation_log_id": log["id"], "execution_id": "exec-final",
+                       "status": "success", "response_summary": "Discord accepted alert"},
+                      separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"whsec", body, hashlib.sha256).hexdigest()
+    response = client.post("/api/automation/callback", data=body, content_type="application/json",
+                           headers={"X-NetOps-Signature": signature})
+    assert response.status_code == 200
+    completed = repo.get_automation_log(log["id"])
+    assert completed["status"] == "success" and completed["execution_id"] == "exec-final"
+    assert completed["response_payload"]["summary"] == "Discord accepted alert"
+    assert completed["completed_at"]
+    assert client.post("/api/automation/callback", data=body, content_type="application/json",
+                       headers={"X-NetOps-Signature": signature}).status_code == 200
+
+
+def test_callback_rejects_bad_signature_unknown_id_and_conflicting_replay(client, container, repo, dev, http):
+    trigger_offline(container, dev)
+    log = repo.list_automation_logs(limit=1)[0]
+    body = json.dumps({"automation_log_id": log["id"], "execution_id": "exec-final",
+                       "status": "failed", "error_details": "provider rejected alert"}).encode()
+    assert client.post("/api/automation/callback", data=body, content_type="application/json",
+                       headers={"X-NetOps-Signature": "sha256=invalid"}).status_code == 401
+    malformed = json.dumps({"automation_log_id": log["id"], "execution_id": "exec-final",
+                            "status": "accepted"}).encode()
+    malformed_sig = "sha256=" + hmac.new(b"whsec", malformed, hashlib.sha256).hexdigest()
+    assert client.post("/api/automation/callback", data=malformed, content_type="application/json",
+                       headers={"X-NetOps-Signature": malformed_sig}).status_code == 400
+    valid = "sha256=" + hmac.new(b"whsec", body, hashlib.sha256).hexdigest()
+    assert client.post("/api/automation/callback", data=body, content_type="application/json",
+                       headers={"X-NetOps-Signature": valid}).status_code == 200
+    conflict = json.dumps({"automation_log_id": log["id"], "execution_id": "another-exec",
+                           "status": "success"}).encode()
+    signature = "sha256=" + hmac.new(b"whsec", conflict, hashlib.sha256).hexdigest()
+    assert client.post("/api/automation/callback", data=conflict, content_type="application/json",
+                       headers={"X-NetOps-Signature": signature}).status_code == 409
+    unknown = json.dumps({"automation_log_id": "5b3b5b3b-5b3b-4b3b-8b3b-5b3b5b3b5b3b",
+                          "execution_id": "exec", "status": "success"}).encode()
+    signature = "sha256=" + hmac.new(b"whsec", unknown, hashlib.sha256).hexdigest()
+    assert client.post("/api/automation/callback", data=unknown, content_type="application/json",
+                       headers={"X-NetOps-Signature": signature}).status_code == 404
+
+
+def test_incident_callback_cannot_complete_backup_workflow_log(client, container, repo, dev, http):
+    backup_log = repo.insert_automation_log({
+        "workflow_name": "n8n-config-backup", "trigger_type": "backup.scheduled",
+        "device_id": dev("main-rtr")["id"], "status": "running",
+    })
+    body = json.dumps({"automation_log_id": backup_log["id"], "execution_id": "wrong-flow",
+                       "status": "success"}).encode()
+    signature = "sha256=" + hmac.new(b"whsec", body, hashlib.sha256).hexdigest()
+    response = client.post("/api/automation/callback", data=body, content_type="application/json",
+                           headers={"X-NetOps-Signature": signature})
+    assert response.status_code == 409
+    assert repo.get_automation_log(backup_log["id"])["status"] == "running"

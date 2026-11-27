@@ -4,7 +4,7 @@ import { useAuth } from "../../context/AuthContext";
 const navItems = [
   { id: "dashboard", label: "Dashboard" }, { id: "devices", label: "Devices", permission: "devices.read" },
   { id: "alerts", label: "Alerts & Incidents", permission: "incidents.read" }, { id: "monitoring", label: "Monitoring Rules", permission: "rules.read" },
-  { id: "automation", label: "Automation", permission: "automation.read" }, { id: "users", label: "User management", permission: "users.read" },
+  { id: "automation", label: "Automation", permission: "automation.read" }, { id: "users", label: "User management", permission: "users.read" }, { id: "security", label: "Security" },
 ];
 
 export default function Layout({ activePage, onNavigate, onLogout, title, children }) {

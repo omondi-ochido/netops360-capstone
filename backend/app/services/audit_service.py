@@ -27,12 +27,15 @@ class AuditService:
     def record(self, action, resource_type, row=None, before=None, after=None):
         fields = SAFE_FIELDS.get(resource_type, ())
         clean = lambda value: {key: value.get(key) for key in fields if key in value} if value else {}
+        actor_profile = getattr(g, "auth_profile", {}) if has_request_context() else {}
+        company_id = (row or {}).get("company_id") or (actor_profile or {}).get("company_id")
         data = {
             "actor_id": None,  # Retained for compatibility with the original audit schema.
             "actor_user_id": (getattr(g, "auth_identity", {}) or {}).get("sub") if has_request_context() else None,
             "action": action,
             "resource_type": resource_type,
             "resource_id": str((row or {}).get("id")) if (row or {}).get("id") else None,
+            "company_id": company_id,
             "description": f"{action} {resource_type}",
             "ip_address": request.remote_addr if has_request_context() else None,
             "request_id": getattr(g, "request_id", None),

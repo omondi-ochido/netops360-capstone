@@ -6,12 +6,13 @@ incident per device+rule, and no successful backup with an empty configuration.
 """
 import copy
 import threading
+import time
 import uuid
 from functools import wraps
 
 from app.models.constants import ACTIVE_INCIDENT_STATUSES
 from app.models.rbac import PERMISSION_KEYS, ROLE_PERMISSIONS
-from app.utils.exceptions import ConflictError, DatabaseError, ValidationError
+from app.utils.exceptions import ConflictError, DatabaseError, NotFoundError, ValidationError
 from app.utils.timeutil import now_iso, parse_ts, utcnow
 
 
@@ -43,6 +44,7 @@ class InMemoryRepository:
         self.automation_logs = {}
         self.audit_logs = []
         self.profiles = {}
+        self.companies = {}
         self.roles = {str(uuid.uuid5(uuid.NAMESPACE_URL, f"netops360:role:{name}")):
                       {"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"netops360:role:{name}")),
                        "name": name, "description": ""} for name in ROLE_PERMISSIONS}
@@ -52,6 +54,7 @@ class InMemoryRepository:
         self.user_roles = []
         self.assistant_invite_reservations = {}
         self.revoked_sessions = {}
+        self.auth_rate_limits = {}
 
     # ------------------------------------------------------------------ health
     @guarded
@@ -83,47 +86,50 @@ class InMemoryRepository:
         return copy.deepcopy(row)
 
     @guarded
-    def provision_auth_profile(self, data, default_role):
+    def register_company(self, data):
+        company_name = " ".join(str(data["company_name"]).split())
+        normalized = company_name.lower()
+        if any(c["normalized_company_name"] == normalized for c in self.companies.values()):
+            return {"status": "company_exists"}
         user_id = str(data["id"])
-        profile = self.profiles.get(user_id)
-        if profile is None:
-            profile = {
-                "id": user_id, "phone_number": None, "account_status": "active",
-                "last_login_at": None, "created_at": now_iso(), "updated_at": now_iso(),
-                "company_name": None, "invited_by": None, **data,
-            }
-            if any(row["email"].lower() == profile["email"].lower()
-                   for row in self.profiles.values()):
-                raise ConflictError("A user with this email already exists.")
-            self.profiles[user_id] = profile
-        else:
-            if any(
-                row["id"] != user_id and row["email"].lower() == data["email"].lower()
-                for row in self.profiles.values()
-            ):
-                raise ConflictError("A user with this email already exists.")
-            profile.update({
-                "email": data["email"],
-                "full_name": data["full_name"],
-                "company_name": data.get("company_name") or profile.get("company_name"),
-                "updated_at": now_iso(),
-            })
+        email = str(data["email"]).lower()
+        if user_id in self.profiles or any(p["email"].lower() == email for p in self.profiles.values()):
+            return {"status": "existing_account"}
+        role = next((r for r in self.roles.values() if r["name"] == "company_admin"), None)
+        if not role:
+            raise DatabaseError("Company Admin role is not configured.")
 
-        roles = self.get_user_roles(user_id)
-        if profile["account_status"] == "active" and not roles:
-            has_super_admin = any(
-                self.roles.get(row["role_id"], {}).get("name") == "super_admin"
-                for row in self.user_roles
-            )
-            role_name = default_role if has_super_admin else "super_admin"
-            role = self.get_role_by_name(role_name)
-            self.assign_user_role(user_id, role["id"], None)
-            roles = [role_name]
-        return {"profile": copy.deepcopy(profile), "roles": roles}
+        created = now_iso()
+        profile = {"id": user_id, "email": email, "full_name": data["full_name"],
+                   "company_name": company_name, "company_id": None, "invited_by": None,
+                   "account_status": "active", "phone_number": None,
+                   "created_at": created, "updated_at": created, "last_login_at": None}
+        company_id = str(uuid.uuid4())
+        company = {"id": company_id, "company_name": company_name,
+                   "normalized_company_name": normalized, "registration_status": "active",
+                   "initial_admin_id": user_id, "created_at": created, "updated_at": created}
+        profile["company_id"] = company_id
+        role_assignment = {"id": str(uuid.uuid4()), "user_id": user_id, "role_id": role["id"],
+                           "assigned_by": user_id, "assigned_at": created}
+        audit = {"id": str(uuid.uuid4()), "actor_id": None, "actor_user_id": user_id,
+                 "action": "company_registered", "resource_type": "company",
+                 "resource_id": company_id, "company_id": company_id,
+                 "description": "Company registered and initial Company Admin assigned.",
+                 "occurred_at": created, "before_metadata": {},
+                 "after_metadata": {"company_id": company_id, "company_name": company_name,
+                                    "initial_admin_id": user_id, "role": "company_admin"}}
+        self.profiles[user_id] = profile
+        self.companies[company_id] = company
+        self.user_roles.append(role_assignment)
+        self.audit_logs.append(audit)
+        return {"status": "registered", "profile": copy.deepcopy(profile),
+                "company": copy.deepcopy(company), "roles": ["company_admin"]}
 
     @guarded
-    def list_profiles(self, limit=50, offset=0, search=None, status=None):
+    def list_profiles(self, limit=50, offset=0, search=None, status=None, company_id=None):
         rows = list(self.profiles.values())
+        if company_id:
+            rows = [p for p in rows if p.get("company_id") == str(company_id)]
         if status:
             rows = [p for p in rows if p["account_status"] == status]
         if search:
@@ -132,6 +138,50 @@ class InMemoryRepository:
         rows.sort(key=lambda p: p["email"].lower())
         total = len(rows)
         return copy.deepcopy(_page(rows, limit, offset)), total
+
+    @guarded
+    def create_company_invitation(self, data):
+        row = {"id": str(uuid.uuid4()), "status": "pending", **data}
+        self.company_invitations = getattr(self, "company_invitations", {})
+        self.company_invitations[row["id"]] = row
+        return copy.deepcopy(row)
+
+    @guarded
+    def provision_company_invitation(self, data):
+        inviter = self.profiles.get(str(data["invited_by"]))
+        role = self.roles.get(str(data["role_id"]))
+        if not inviter or not inviter.get("company_id") or not role or role["name"] not in ("network_operator", "viewer"):
+            raise ValidationError("The company invitation is not valid.")
+        if "company_admin" not in self.get_user_roles(data["invited_by"]):
+            raise ValidationError("Only a Company Admin may invite users.")
+        if any(profile["email"].lower() == data["email"].lower() for profile in self.profiles.values()):
+            raise ConflictError("A user with this email already exists.")
+        user_id = str(data["user_id"])
+        profile = {"id": user_id, "email": data["email"], "full_name": data["full_name"],
+                   "phone_number": data.get("phone_number"), "account_status": "pending",
+                   "company_name": inviter.get("company_name"), "company_id": inviter["company_id"],
+                   "invited_by": data["invited_by"], "created_at": now_iso(), "updated_at": now_iso(),
+                   "last_login_at": None}
+        self.profiles[user_id] = profile
+        self.user_roles.append({"id": str(uuid.uuid4()), "user_id": user_id, "role_id": role["id"],
+                                "assigned_by": data["invited_by"], "assigned_at": now_iso()})
+        invitation = self.create_company_invitation({**data, "company_id": inviter["company_id"]})
+        return {"profile": copy.deepcopy(profile), "invitation": invitation}
+
+    @guarded
+    def accept_company_invitation(self, user_id):
+        now = utcnow()
+        invitation = next((item for item in getattr(self, "company_invitations", {}).values()
+                           if item["user_id"] == str(user_id) and item["status"] == "pending"), None)
+        if not invitation:
+            raise NotFoundError("No active invitation was found for this account.")
+        if parse_ts(invitation["expires_at"]) <= now:
+            invitation["status"] = "expired"
+            raise NotFoundError("No active invitation was found for this account.")
+        invitation["status"] = "accepted"
+        invitation["accepted_at"] = now.isoformat()
+        profile = self.update_profile(user_id, {"account_status": "active"})
+        return {"profile": profile, "invitation": copy.deepcopy(invitation)}
 
     @guarded
     def update_profile(self, user_id, data):
@@ -275,6 +325,12 @@ class InMemoryRepository:
         return copy.deepcopy(_page(rows, limit, offset))
 
     @guarded
+    def list_company_audit_logs(self, company_id, limit=50, offset=0):
+        rows = [r for r in self.audit_logs if str(r.get("company_id") or "") == str(company_id)]
+        rows.sort(key=lambda r: r.get("occurred_at", ""), reverse=True)
+        return copy.deepcopy(_page(rows, limit, offset)), len(rows)
+
+    @guarded
     def is_session_revoked(self, session_id):
         return str(session_id) in self.revoked_sessions
 
@@ -284,6 +340,18 @@ class InMemoryRepository:
                "expires_at": expires_at, "revoked_at": now_iso()}
         self.revoked_sessions[str(session_id)] = row
         return copy.deepcopy(row)
+
+    @guarded
+    def consume_auth_rate_limit(self, bucket_key, limit, window_seconds):
+        now = time.time()
+        item = self.auth_rate_limits.get(str(bucket_key))
+        if not item or now - item["started_at"] >= window_seconds:
+            self.auth_rate_limits[str(bucket_key)] = {"started_at": now, "count": 1}
+            return True
+        if item["count"] >= limit:
+            return False
+        item["count"] += 1
+        return True
 
     # ----------------------------------------------------------------- devices
     @guarded
@@ -536,6 +604,26 @@ class InMemoryRepository:
         return copy.deepcopy(row)
 
     @guarded
+    def complete_automation_log(self, log_id, data):
+        row = self.automation_logs.get(str(log_id))
+        if row is None:
+            return None
+        if row["status"] not in ("pending", "running"):
+            return copy.deepcopy(row)
+        row.update(data)
+        return copy.deepcopy(row)
+
+    @guarded
+    def update_automation_log_if_open(self, log_id, data):
+        row = self.automation_logs.get(str(log_id))
+        if row is None:
+            return None
+        if row["status"] not in ("pending", "running") or row.get("completed_at"):
+            return copy.deepcopy(row)
+        row.update(data)
+        return copy.deepcopy(row)
+
+    @guarded
     def get_automation_log(self, log_id):
         return copy.deepcopy(self.automation_logs.get(str(log_id)))
 
@@ -554,6 +642,16 @@ class InMemoryRepository:
         for a in self.automation_logs.values():
             if a["incident_id"] == incident_id and a["trigger_type"] == trigger_type:
                 return copy.deepcopy(a)
+        return None
+
+    @guarded
+    def find_automation_log_for_execution(self, execution_id, device_id, trigger_type):
+        for row in self.automation_logs.values():
+            if (row.get("workflow_name") == "n8n-config-backup"
+                    and row.get("execution_id") == execution_id
+                    and row.get("device_id") == device_id
+                    and row.get("trigger_type") == trigger_type):
+                return copy.deepcopy(row)
         return None
 
     @guarded

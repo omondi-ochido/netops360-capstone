@@ -46,7 +46,7 @@ def validate_rule(data):
     """Validate a *complete* rule definition and return a clean, whitelisted dict."""
     if not isinstance(data, dict):
         raise ValidationError("Rule must be a JSON object.")
-    unknown = sorted(set(data) - RULE_WRITABLE - {"id", "created_at", "updated_at"})
+    unknown = sorted(set(data) - RULE_WRITABLE - {"id", "created_at", "updated_at", "company_id"})
     if unknown:
         raise ValidationError(f"Unknown fields: {', '.join(unknown)}.")
 
@@ -149,11 +149,17 @@ class RuleEngine:
         self.repo.delete_rule(rule["id"])
 
     # -------------------------------------------------------------- evaluation
-    def evaluate(self, result, rules, device_id=None):
+    def evaluate(self, result, rules, device_id=None, company_id=None):
         """Pure evaluation: returns one structured entry per rule, performs no I/O."""
         evaluations = []
         for rule in rules:
             if not rule.get("enabled", True):
+                continue
+            # Monitoring is system-wide and has no request context. Apply
+            # ownership here so tenant rules cannot evaluate another tenant's
+            # devices in background jobs.
+            rule_company_id = rule.get("company_id")
+            if rule_company_id is not None and str(rule_company_id) != str(company_id):
                 continue
             if rule.get("scope") == "device" and device_id and rule.get("device_id") != device_id:
                 continue
@@ -181,7 +187,8 @@ class RuleEngine:
             summary["skipped"] = f"status {result.get('status')} is not evaluated"
             return summary
         rules = self.repo.list_rules(enabled_only=True)
-        for ev in self.evaluate(result, rules, device_id=device["id"]):
+        for ev in self.evaluate(result, rules, device_id=device["id"],
+                                company_id=device.get("company_id")):
             if not ev["valid"] or not ev["evaluable"]:
                 continue
             rule = ev["rule"]

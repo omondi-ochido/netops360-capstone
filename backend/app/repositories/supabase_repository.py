@@ -29,8 +29,45 @@ BACKUP_META_COLUMNS = (
     "id,device_id,backup_type,status,checksum,created_at,completed_at,error_message,metadata"
 )
 
+TENANT_TABLES = {"profiles", "devices", "monitoring_logs", "rules", "incidents",
+                 "config_backups", "automation_logs", "audit_logs"}
+
+
+class _TenantBuilder:
+    """Add the authenticated tenant predicate to all user-facing table queries."""
+    def __init__(self, builder, table, company_id=None, filter_enabled=True):
+        self._builder = builder
+        self._table = table
+        self._company_id = company_id if table in TENANT_TABLES else None
+        self._filter_enabled = filter_enabled
+
+    def __getattr__(self, name):
+        attr = getattr(self._builder, name)
+        if not callable(attr):
+            return attr
+
+        def invoke(*args, **kwargs):
+            if self._company_id and name in ("insert", "upsert", "update") and args:
+                payload = args[0]
+                if isinstance(payload, dict):
+                    payload = {**payload, "company_id": self._company_id}
+                elif isinstance(payload, list):
+                    payload = [{**row, "company_id": self._company_id} for row in payload]
+                args = (payload, *args[1:])
+            result = attr(*args, **kwargs)
+            filter_enabled = self._filter_enabled and name not in ("insert", "upsert")
+            return _TenantBuilder(result, self._table, self._company_id, filter_enabled)
+        return invoke
+
+    def apply_tenant_filter(self):
+        if self._company_id and self._filter_enabled:
+            self._builder = self._builder.eq("company_id", self._company_id)
+        return self._builder
+
 
 def _execute(builder):
+    if isinstance(builder, _TenantBuilder):
+        builder = builder.apply_tenant_filter()
     for attempt in range(2):
         try:
             with _EXECUTE_LOCK:
@@ -90,7 +127,17 @@ class SupabaseRepository:
                 self._rule_cache.enabled_rules = previous
 
     def _t(self, name):
-        return self.client.table(name)
+        company_id = None
+        try:
+            from flask import g, has_request_context
+            if has_request_context():
+                profile = getattr(g, "auth_profile", None)
+                permissions = getattr(g, "auth_permissions", set()) or set()
+                if profile and profile.get("company_id") and "system.manage" not in permissions:
+                    company_id = str(profile["company_id"])
+        except RuntimeError:
+            pass
+        return _TenantBuilder(self.client.table(name), name, company_id)
 
     def insert_audit_log(self, data):
         return _first(_execute(self._t("audit_logs").insert(data)))
@@ -102,8 +149,10 @@ class SupabaseRepository:
     def profile_exists_by_email(self, email):
         return bool(_execute(self._t("profiles").select("id").ilike("email", str(email)).limit(1)).data)
 
-    def list_profiles(self, limit=50, offset=0, search=None, status=None):
+    def list_profiles(self, limit=50, offset=0, search=None, status=None, company_id=None):
         q = self._t("profiles").select("*", count="exact").order("email")
+        if company_id:
+            q = q.eq("company_id", str(company_id))
         if status:
             q = q.eq("account_status", status)
         if search:
@@ -115,15 +164,38 @@ class SupabaseRepository:
     def create_profile(self, data):
         return _first(_execute(self._t("profiles").insert(data)))
 
-    def provision_auth_profile(self, data, default_role):
-        response = _execute(self.client.rpc("provision_auth_profile", {
-            "p_user_id": str(data["id"]),
-            "p_email": data["email"],
-            "p_full_name": data["full_name"],
-            "p_company_name": data.get("company_name"),
-            "p_default_role": default_role,
-        }))
-        return _rpc_row(response)
+    def create_company_invitation(self, data):
+        return _first(_execute(self._t("company_invitations").insert(data)))
+
+    def provision_company_invitation(self, data):
+        return _rpc_row(_execute(self.client.rpc("provision_company_invitation", {
+            "p_user_id": str(data["user_id"]), "p_email": data["email"],
+            "p_full_name": data["full_name"], "p_phone_number": data.get("phone_number"),
+            "p_invited_by": str(data["invited_by"]), "p_role_id": str(data["role_id"]),
+            "p_expires_at": data["expires_at"],
+        })))
+
+    def accept_company_invitation(self, user_id):
+        return _rpc_row(_execute(self.client.rpc("accept_company_invitation", {
+            "p_user_id": str(user_id),
+        })))
+
+    def register_company(self, data):
+        try:
+            response = _execute(self.client.rpc("register_company_with_initial_admin", {
+                "p_user_id": str(data["id"]),
+                "p_email": data["email"],
+                "p_full_name": data["full_name"],
+                "p_company_name": data["company_name"],
+            }))
+            return _rpc_row(response)
+        except ConflictError:
+            normalized = " ".join(data["company_name"].split()).lower()
+            exists = _execute(self._t("companies").select("id")
+                              .eq("normalized_company_name", normalized).limit(1)).data
+            if exists:
+                return {"status": "company_exists"}
+            raise
 
     def update_profile(self, user_id, data):
         return _first(_execute(self._t("profiles").update(data).eq("id", str(user_id))))
@@ -223,6 +295,12 @@ class SupabaseRepository:
         return _execute(self._t("audit_logs").select("*").eq("actor_user_id", str(user_id))
                         .order("occurred_at", desc=True).range(offset, offset + limit - 1)).data
 
+    def list_company_audit_logs(self, company_id, limit=50, offset=0):
+        response = _execute(self._t("audit_logs").select("*", count="exact")
+                            .eq("company_id", str(company_id))
+                            .order("occurred_at", desc=True).range(offset, offset + limit - 1))
+        return response.data, response.count
+
     def is_session_revoked(self, session_id):
         return bool(_execute(self._t("revoked_sessions").select("session_id")
                              .eq("session_id", str(session_id)).limit(1)).data)
@@ -231,6 +309,17 @@ class SupabaseRepository:
         return _first(_execute(self._t("revoked_sessions").upsert({
             "session_id": str(session_id), "user_id": str(user_id), "expires_at": expires_at,
         }, on_conflict="session_id")))
+
+    def consume_auth_rate_limit(self, bucket_key, limit, window_seconds):
+        response = _execute(self.client.rpc("consume_auth_rate_limit", {
+            "p_bucket_key": bucket_key, "p_limit": limit, "p_window_seconds": window_seconds,
+        }))
+        value = _rpc_row(response)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, dict):
+            return bool(value.get("consume_auth_rate_limit"))
+        raise DatabaseError("The authentication rate limit could not be checked.")
 
     # ------------------------------------------------------------------ health
     def ping(self):
@@ -404,6 +493,18 @@ class SupabaseRepository:
     def update_automation_log(self, log_id, data):
         return _first(_execute(self._t("automation_logs").update(data).eq("id", str(log_id))))
 
+    def complete_automation_log(self, log_id, data):
+        # Conditional update makes terminal callback application safe under replays/races.
+        result = _first(_execute(self._t("automation_logs").update(data)
+                                 .eq("id", str(log_id)).in_("status", ["pending", "running"])))
+        return result or self.get_automation_log(log_id)
+
+    def update_automation_log_if_open(self, log_id, data):
+        result = _first(_execute(self._t("automation_logs").update(data)
+                                 .eq("id", str(log_id)).in_("status", ["pending", "running"])
+                                 .is_("completed_at", "null")))
+        return result or self.get_automation_log(log_id)
+
     def get_automation_log(self, log_id):
         return _first(_execute(self._t("automation_logs").select("*").eq("id", str(log_id)).limit(1)))
 
@@ -421,6 +522,12 @@ class SupabaseRepository:
 
     def find_automation_log(self, incident_id, trigger_type):
         q = (self._t("automation_logs").select("*").eq("incident_id", incident_id)
+             .eq("trigger_type", trigger_type).limit(1))
+        return _first(_execute(q))
+
+    def find_automation_log_for_execution(self, execution_id, device_id, trigger_type):
+        q = (self._t("automation_logs").select("*").eq("workflow_name", "n8n-config-backup")
+             .eq("execution_id", execution_id).eq("device_id", str(device_id))
              .eq("trigger_type", trigger_type).limit(1))
         return _first(_execute(q))
 

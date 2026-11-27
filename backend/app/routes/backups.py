@@ -23,7 +23,7 @@ def list_backups():
 @bp.get("/<backup_id>")
 @require_permission("backups.read")
 def get_backup(backup_id):
-    """Returns the full configuration text - protected by the API key."""
+    """Returns sensitive configuration text to callers with backups.read permission."""
     c = get_container()
     backup = c.backups.get(backup_id)
     c.audit.record("sensitive_contents_read", "backup", row=backup)

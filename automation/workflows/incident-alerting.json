@@ -1,0 +1,535 @@
+{
+  "name": "NetOps360 Incident Alerting",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "netops-incident",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "d700d8b7-e2db-4dd0-82d8-2fb8b7912301",
+      "name": "Incident Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "netops-incident"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.body ?? $json;\nconst headers = $json.headers ?? {};\nconst supplied = headers['x-netops-webhook-token'] || headers['X-NetOps-Webhook-Token'];\nconst expected = $env.NETOPS_WEBHOOK_SECRET || '';\nconst suppliedBytes = Buffer.from(typeof supplied === 'string' ? supplied : '');\nconst expectedBytes = Buffer.from(expected);\nif (!expected || suppliedBytes.length !== expectedBytes.length || !require('crypto').timingSafeEqual(suppliedBytes, expectedBytes)) throw new Error('Unauthorized incident webhook');\nconst events = ['incident.opened','incident.acknowledged','incident.resolved'];\nconst required = ['id','title','severity'];\nif (!events.includes(p.event_type)) throw new Error('Unsupported event_type');\nif (!p.incident || required.some(k => typeof p.incident[k] !== 'string' || !p.incident[k].trim())) throw new Error('Missing incident fields');\nif (!p.device || typeof p.device.hostname !== 'string' || !p.device.hostname || typeof p.device.ip_address !== 'string' || !p.device.ip_address || typeof p.device.site !== 'string' || !p.device.site) throw new Error('Missing device fields');\nif (typeof p.timestamp !== 'string' || Number.isNaN(Date.parse(p.timestamp)) || !p.automation_log_id) throw new Error('Missing or invalid timestamp or automation_log_id');\nif (!['critical','warning','info'].includes(p.incident.severity)) throw new Error('Unsupported severity');\nconst incident = p.incident, device = p.device;\nconst resolved = p.event_type === 'incident.resolved';\nconst priority = incident.severity === 'critical' ? 'HIGH PRIORITY' : incident.severity === 'warning' ? 'Warning' : 'Informational';\nconst message = `${resolved ? 'RECOVERY' : priority}: ${incident.title}\\nHost: ${device.hostname} (${device.ip_address})\\nSite: ${device.site}\\nSeverity: ${incident.severity}\\nMetric: ${incident.trigger_metric ?? p.rule?.metric ?? 'n/a'} = ${incident.trigger_value ?? 'n/a'}\\nDetected: ${p.timestamp}\\nStatus: ${incident.status}\\nReference: ${incident.id}`;\nconst channel = ($env.NETOPS_ALERT_CHANNEL || 'discord').toLowerCase();\nif (!['email','telegram','discord','slack','none'].includes(channel)) throw new Error('Unsupported NETOPS_ALERT_CHANNEL');\nif (incident.severity === 'info' && $env.NETOPS_NOTIFY_INFO !== 'true') return [{json:{...p, message, channel:'none', skipped:true}}];\nif (p.event_type === 'incident.acknowledged' && $env.NETOPS_NOTIFY_ACKNOWLEDGED !== 'true') return [{json:{...p, message, channel:'none', skipped:true}}];\nreturn [{json:{...p, message, channel, skipped:false}}];"
+      },
+      "id": "5d0a2e1f-a588-47f8-9884-aaf42131192d",
+      "name": "Validate and Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "telegram",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "telegram"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "telegram"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "discord",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "discord"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "discord"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "slack",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "slack"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "slack"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "email",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "email"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "email"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "none",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "none"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "none"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1333cf36-9e2e-40c3-b7bc-a9a2e7c41ab0",
+      "name": "Select Channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{$env.NETOPS_TELEGRAM_BOT_TOKEN}}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { chat_id: $env.NETOPS_TELEGRAM_CHAT_ID, text: $json.message } }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "5f0578d4-71af-4f24-a1f6-f4a34ff50a11",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.NETOPS_DISCORD_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { content: $json.message } }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "0153e013-8525-4ce8-bfa3-7cb373aa9b4b",
+      "name": "Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        220
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.NETOPS_SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { text: $json.message } }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "56d624ec-ebc2-4349-95f5-fd31c5ff4558",
+      "name": "Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.NETOPS_ALERT_FROM}}",
+        "toEmail": "={{$env.NETOPS_ALERT_TO}}",
+        "subject": "={{`[NetOps360 ${$json.incident.severity}] ${$json.incident.title}`}}",
+        "text": "={{$json.message}}",
+        "options": {}
+      },
+      "id": "d9c43547-78d6-472f-861d-c98c3d907a80",
+      "name": "Email (configure SMTP credential)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        920,
+        460
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "smtp": {
+          "name": "NetOps360 SMTP"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validate and Format').first().json;\nconst out = $json ?? {};\nconst statusCode = Number(out.statusCode ?? 0);\nconst body = out.body ?? out;\nconst httpAccepted = statusCode >= 200 && statusCode < 300;\nlet providerAccepted = !out.error;\nif (input.channel === 'telegram') providerAccepted = httpAccepted && body?.ok === true;\nelse if (input.channel === 'slack') providerAccepted = httpAccepted && (body === 'ok' || body?.ok === true);\nelse if (input.channel === 'discord') providerAccepted = httpAccepted;\nelse if (input.channel === 'email') providerAccepted = !out.error;\nconst skipped = input.skipped === true || input.channel === 'none';\nconst failed = !skipped && !providerAccepted;\nconst summary = skipped ? 'Notification skipped by configured policy' : failed ? `Notification provider failed (${input.channel})` : `Notification accepted by ${input.channel}`;\nconst callback = {automation_log_id:input.automation_log_id, execution_id:String($execution.id), status:failed?'failed':'success', response_summary:summary, error_details:failed?`${input.channel} notification was not accepted by the provider`:null};\nconst raw = JSON.stringify(callback);\nconst signature = 'sha256=' + require('crypto').createHmac('sha256', $env.NETOPS_WEBHOOK_SECRET).update(raw).digest('hex');\nreturn [{json:{callback_body:raw, callback_signature:signature}}];"
+      },
+      "id": "a2e4ded7-b534-4c55-b2cc-b6198e8aafd8",
+      "name": "Build Execution Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1170,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.NETOPS_FLASK_CALLBACK_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-NetOps-Signature",
+              "value": "={{$json.callback_signature}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{$json.callback_body}}",
+        "options": {
+          "timeout": 10000,
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 1000
+          }
+        }
+      },
+      "id": "f51b2307-c2d6-467b-a4d4-e063d006128c",
+      "name": "Report Outcome to Flask",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1390,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json;\nconst isSupported = ['router','switch'].includes(String(p.device?.device_type || '').toLowerCase());\nconst policyEnabled = (p.incident?.severity === 'critical' && $env.NETOPS_BACKUP_ON_CRITICAL === 'true') || (p.incident?.severity === 'warning' && $env.NETOPS_BACKUP_ON_WARNING === 'true');\nif ($env.NETOPS_BACKUP_EVENT_ENABLED !== 'true' || p.event_type !== 'incident.opened' || !p.device?.id || !p.incident?.id || !isSupported || !policyEnabled) return [];\nreturn [{json:p}];"
+      },
+      "id": "2bde698f-9d7a-4b55-b8ce-4e5f41e7c900",
+      "name": "Select Incident Backup Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.NETOPS_BACKUP_WORKFLOW_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-NetOps-Backup-Token",
+              "value": "={{$env.NETOPS_BACKUP_EVENT_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json}}",
+        "options": {
+          "timeout": 130000
+        }
+      },
+      "id": "da3dc95b-9734-485f-b6dc-6f49501d156c",
+      "name": "Start Incident Backup Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        930,
+        640
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Incident Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate and Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Format": {
+      "main": [
+        [
+          {
+            "node": "Select Channel",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Select Incident Backup Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Channel": {
+      "main": [
+        [
+          {
+            "node": "Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discord",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email (configure SMTP credential)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Execution Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram": {
+      "main": [
+        [
+          {
+            "node": "Build Execution Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discord": {
+      "main": [
+        [
+          {
+            "node": "Build Execution Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack": {
+      "main": [
+        [
+          {
+            "node": "Build Execution Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email (configure SMTP credential)": {
+      "main": [
+        [
+          {
+            "node": "Build Execution Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Execution Callback": {
+      "main": [
+        [
+          {
+            "node": "Report Outcome to Flask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Incident Backup Events": {
+      "main": [
+        [
+          {
+            "node": "Start Incident Backup Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none"
+  },
+  "versionId": "2743fe36-3288-4e14-b971-1c3f5a9053c4",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

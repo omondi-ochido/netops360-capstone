@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 from app.models.constants import EVENT_TYPES
-from app.utils.exceptions import ConflictError, NotFoundError
+from app.utils.exceptions import AuthError, ConflictError, NotFoundError, ValidationError
 from app.utils.timeutil import now_iso, parse_ts, utcnow
 from app.utils.validators import validate_uuid
 
@@ -30,7 +30,7 @@ class AutomationService:
 
     @property
     def configured(self):
-        return bool(self.config.n8n_webhook_url)
+        return bool(self.config.n8n_webhook_url and self.config.n8n_webhook_secret)
 
     # ----------------------------------------------------------------- payload
     @staticmethod
@@ -52,7 +52,8 @@ class AutomationService:
             "device": {
                 "id": device["id"], "hostname": device["hostname"],
                 "ip_address": device["ip_address"], "device_type": device["device_type"],
-                "site": device.get("site"), "current_status": device.get("current_status"),
+                "site": device.get("site") or "Unspecified",
+                "current_status": device.get("current_status"),
             },
             "rule": {
                 "id": rule["id"], "name": rule["name"], "metric": rule["metric"],
@@ -67,7 +68,7 @@ class AutomationService:
         if event_type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {event_type}")
         if not self.configured:
-            logger.debug("N8N_WEBHOOK_URL not set; skipping %s", event_type)
+            logger.debug("n8n webhook URL or shared secret is not configured; skipping %s", event_type)
             return None
         # flood guard: at most one event of each type per incident
         if self.repo.find_automation_log(incident["id"], event_type):
@@ -79,6 +80,9 @@ class AutomationService:
             "status": "pending",
             "request_payload": self.build_payload(event_type, incident, device, rule),
         })
+        payload = log["request_payload"]
+        payload["automation_log_id"] = log["id"]
+        log = self.repo.update_automation_log(log["id"], {"request_payload": payload}) or log
         self._dispatch(log["id"])
         return log
 
@@ -103,36 +107,81 @@ class AutomationService:
             return log
         retries = log["retry_count"] + (1 if is_retry else 0)
         self.repo.update_automation_log(log_id, {"status": "running", "started_at": now_iso(),
-                                                 "retry_count": retries})
+                                                 "retry_count": retries, "completed_at": None,
+                                                 "error_message": None})
         body = json.dumps(log["request_payload"], separators=(",", ":"), default=str).encode("utf-8")
         headers = {"Content-Type": "application/json", "X-NetOps-Event": log["trigger_type"],
                    "X-NetOps-Delivery": str(log_id)}
         if self.config.n8n_webhook_secret:
             digest = hmac.new(self.config.n8n_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
             headers["X-NetOps-Signature"] = f"sha256={digest}"
+            headers["X-NetOps-Webhook-Token"] = self.config.n8n_webhook_secret
 
-        update = {"completed_at": now_iso()}
+        update = {}
         try:
             resp = self._post(self.config.n8n_webhook_url, data=body, headers=headers,
                               timeout=self.config.automation_timeout_seconds)
             text = (getattr(resp, "text", "") or "")[:2000]
             update["response_payload"] = {"status_code": resp.status_code, "body": text}
             if 200 <= resp.status_code < 300:
-                update.update(status="success", error_message=None)
+                # A 2xx only confirms n8n accepted the webhook. The authenticated
+                # execution callback is the sole authority for terminal status.
+                update.update(status="running", error_message=None, completed_at=None)
                 try:
                     update["execution_id"] = str(resp.json().get("executionId") or "") or None
                 except Exception:
                     pass
             else:
-                update.update(status="failed", error_message=f"n8n returned HTTP {resp.status_code}")
+                update.update(status="failed", completed_at=now_iso(),
+                              error_message=f"n8n returned HTTP {resp.status_code}")
         except requests.Timeout:
-            update.update(status="failed", error_message="Webhook request timed out.")
+            update.update(status="failed", completed_at=now_iso(), error_message="Webhook request timed out.")
         except requests.RequestException:
-            update.update(status="failed", error_message="Webhook endpoint unreachable.")
+            update.update(status="failed", completed_at=now_iso(), error_message="Webhook endpoint unreachable.")
         except Exception:
             logger.exception("Unexpected webhook error")
-            update.update(status="failed", error_message="Unexpected webhook error.")
-        return self.repo.update_automation_log(log_id, update)
+            update.update(status="failed", completed_at=now_iso(), error_message="Unexpected webhook error.")
+        return self.repo.update_automation_log_if_open(log_id, update)
+
+    def complete_callback(self, raw_body, signature, payload):
+        """Apply an authenticated terminal n8n result to its original log row."""
+        secret = self.config.n8n_webhook_secret
+        if not secret:
+            raise AuthError("Automation callback authentication is not configured.")
+        expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        if not isinstance(signature, str) or not hmac.compare_digest(expected, signature):
+            raise AuthError("Invalid automation callback signature.")
+        if not isinstance(payload, dict):
+            raise ValidationError("Callback body must be a JSON object.")
+        log_id = validate_uuid(payload.get("automation_log_id"), "automation_log_id")
+        execution_id = payload.get("execution_id")
+        status = payload.get("status")
+        if not isinstance(execution_id, str) or not execution_id.strip() or len(execution_id) > 200:
+            raise ValidationError("execution_id must be a non-empty string of at most 200 characters.")
+        if status not in ("success", "failed"):
+            raise ValidationError("status must be success or failed.")
+        summary = payload.get("response_summary")
+        error = payload.get("error_details")
+        if summary is not None and not isinstance(summary, (str, dict, list)):
+            raise ValidationError("response_summary must be text, an object, or an array.")
+        if error is not None and not isinstance(error, str):
+            raise ValidationError("error_details must be text.")
+        log = self.repo.get_automation_log(log_id)
+        if log is None:
+            raise NotFoundError("Automation log not found.")
+        if log.get("workflow_name") != WORKFLOW_NAME:
+            raise ConflictError("Automation callback does not match this workflow.")
+        if log["status"] in ("success", "failed"):
+            if log["status"] == status and log.get("execution_id") == execution_id:
+                return log  # idempotent replay
+            raise ConflictError("Automation log already has a different terminal result.")
+        update = {
+            "status": status, "execution_id": execution_id,
+            "response_payload": {"summary": summary} if summary is not None else {},
+            "error_message": error[:2000] if error else None,
+            "completed_at": now_iso(),
+        }
+        return self.repo.complete_automation_log(log_id, update)
 
     # ------------------------------------------------------------------ retries
     def retry(self, log_id):

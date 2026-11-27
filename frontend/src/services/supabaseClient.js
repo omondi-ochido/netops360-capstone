@@ -25,6 +25,11 @@ export function supabaseConfigured() {
   return Boolean(env.VITE_SUPABASE_URL && env.VITE_SUPABASE_PUBLISHABLE_KEY);
 }
 
+export function oauthProviderEnabled(provider) {
+  if (provider === "azure") return env.VITE_SUPABASE_MICROSOFT_ENABLED === "true";
+  return ["google", "github"].includes(provider);
+}
+
 // Allows isolated fetch-contract tests to provide a Supabase Auth stub.
 export function setSupabaseClientForTests(value) {
   client = value;

@@ -68,8 +68,11 @@ class BackupService:
                 "NETOPS_SWITCH_SSH_USERNAME / NETOPS_SWITCH_SSH_PASSWORD"
                 if is_switch else "NETOPS_SSH_USERNAME / NETOPS_SSH_PASSWORD"
             )
+            message = f"SSH credentials are not configured ({credential_names})."
+            row = self._record_failure(device, backup_type, message, {"error_type": "ssh_not_configured"})
             raise ServiceUnavailableError(
-                f"SSH credentials are not configured ({credential_names}).",
+                message,
+                details={"reason": "ssh_not_configured", "backup_id": row.get("id")},
                 code="ssh_not_configured",
             )
 
@@ -97,9 +100,14 @@ class BackupService:
                          if header == "=== IP ADDRESSES ==="), None,
                     )
                     commands = [command for _, command, _ in section_outputs]
+                    # Only the interface/bridge configuration command can establish
+                    # that a switch returned configuration. Runtime diagnostics such
+                    # as `ip addr` and `ip route` are not a configuration snapshot.
                     has_configuration = any(
                         isinstance(output, str) and output.strip()
-                        for _, _, output in section_outputs
+                        for _, command, output in section_outputs
+                        if command in ("cat /etc/network/interfaces",
+                                      "brctl show 2>/dev/null || ovs-vsctl show 2>/dev/null")
                     )
                 else:
                     configuration = conn.send_command(CONFIG_COMMAND)
@@ -116,8 +124,8 @@ class BackupService:
         except Exception as exc:
             kind, message = classify_ssh_error(exc)
             logger.error("Backup SSH failure for %s: %s", device["hostname"], kind)
-            self._record_failure(device, backup_type, message, {"error_type": kind})
-            raise BackupFailedError(message, details={"reason": kind}) from None
+            row = self._record_failure(device, backup_type, message, {"error_type": kind})
+            raise BackupFailedError(message, details={"reason": kind, "backup_id": row.get("id")}) from None
 
         if not has_configuration:
             message = "The device returned an empty configuration."

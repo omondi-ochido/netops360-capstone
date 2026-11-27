@@ -30,3 +30,18 @@ The five skipped backend tests are integration checks that require a configured 
 - End-to-end password reset with a real mailbox and Supabase project.
 
 Configure and validate those items in a non-production Supabase project by following [AUTH_SETUP.md](AUTH_SETUP.md) before deployment.
+
+## Company registration follow-up (2026-11-28)
+
+After the secure company-registration work, the backend suite reports **148 passed, 5 skipped**;
+the skipped tests require live Supabase credentials. Both frontend test files pass and the Vite
+production build succeeds. Added coverage checks that unaffiliated authenticated identities
+remain unprovisioned, one normalized company claim creates the Company Admin and atomic audit entry,
+duplicates return 409, thread-raced claims create one company, and registration failures leave no
+partial in-memory rows. Frontend auth tests verify that company details survive the OAuth/email callback
+flow and company name is not sent as authorization metadata.
+
+The local concurrency test exercises the in-memory repository lock. The PostgreSQL advisory lock,
+unique constraint, new migration, Supabase Auth callback settings, and RPC transaction have not been
+executed against a live project. New Company Admin permissions intentionally remain empty until
+company-scoped API access and RLS are implemented.

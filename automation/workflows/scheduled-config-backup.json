@@ -1,0 +1,94 @@
+{
+  "name": "NetOps360 Scheduled and Incident Configuration Backups",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "days", "daysInterval": 1, "triggerAtHour": 2, "triggerAtMinute": 0}]}},
+      "id": "6cf203ef-2298-4c28-a10a-8b795cf98a11", "name": "Daily at 02:00", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2, "position": [180, 160]
+    },
+    {
+      "parameters": {"httpMethod": "POST", "path": "netops-config-backup-event", "responseMode": "lastNode", "options": {}},
+      "id": "2d39461a-e2a5-4f61-9ab8-df77f5984ef9", "name": "Incident Backup Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [180, 560], "webhookId": "netops-config-backup-event"
+    },
+    {
+      "parameters": {"jsCode": "return [{json:{started_at:new Date().toISOString(),execution_id:String($execution.id)}}];"},
+      "id": "11cc8adc-8f5d-48ee-a7de-931dbe64e2ca", "name": "Capture Scheduled Start", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [300, 160]
+    },
+    {
+      "parameters": {"url": "={{$env.NETOPS_FLASK_BASE_URL}}/api/devices", "sendQuery": true, "queryParameters": {"parameters": [{"name": "limit", "value": "200"}, {"name": "offset", "value": "0"}]}, "sendHeaders": true, "headerParameters": {"parameters": [{"name": "Authorization", "value": "={{'Bearer ' + $env.NETOPS_BACKUP_API_TOKEN}}"}]}, "options": {"timeout": 15000, "pagination": {"pagination": {"paginationMode": "updateAParameterInEachRequest", "parameters": {"parameters": [{"type": "qs", "name": "offset", "value": "={{$pageCount * 200}}"}]}, "paginationCompleteWhen": "other", "completeExpression": "={{$response.body.data.length < 200}}", "limitPagesFetched": true, "maxRequests": 50, "requestInterval": 100}}}},
+      "id": "d659feb8-746c-4aab-97fb-71d1fd3e1a27", "name": "Get Flask Device Inventory", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [420, 160]
+    },
+    {
+      "parameters": {"jsCode": "const pages = $input.all().map(x => x.json);\nconst devices = pages.flatMap(p => Array.isArray(p.data) ? p.data : []);\nconst supported = new Set(['router','switch']);\nreturn devices.map(d => {\n  const active = d.is_active !== false;\n  const supportedType = supported.has(String(d.device_type || '').toLowerCase());\n  const permitted = d.ssh_enabled === true || supportedType;\n  const validId = typeof d.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(d.id);\n  const eligible = active && supportedType && permitted && validId && typeof d.ip_address === 'string' && typeof d.hostname === 'string';\n  return {json:{id:d.id,hostname:d.hostname,ip_address:d.ip_address,device_type:d.device_type,site:d.site || 'Unspecified',eligible,skip_reason:!active?'inactive':!supportedType?'unsupported_device_type':!permitted?'ssh_backup_disabled':!validId?'invalid_device_id':null}};\n});"},
+      "id": "34aceb04-33f7-474d-9d75-4668f883d408", "name": "Check Backup Eligibility", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [660, 160]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{$json.eligible}}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}, "id": "eligible"}], "combinator": "and"}, "options": {}},
+      "id": "8f39980b-80fd-4a42-b5c8-bef1b7984e99", "name": "Eligible Device?", "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [880, 160]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{$env.NETOPS_FLASK_BASE_URL}}/api/devices/{{$json.id}}/backup", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "Authorization", "value": "={{'Bearer ' + $env.NETOPS_BACKUP_API_TOKEN}}"}, {"name": "X-N8N-Execution-Id", "value": "={{String($execution.id)}}"}]}, "sendBody": true, "specifyBody": "json", "jsonBody": "={\"backup_type\":\"scheduled\"}", "options": {"timeout": 120000, "batching": {"batch": {"batchSize": 1, "batchInterval": 1000}}, "response": {"response": {"fullResponse": true, "neverError": false, "responseFormat": "json"}}}},
+      "id": "f5b9f73d-f70c-41b3-af66-27577ef52efb", "name": "Run Scheduled Backup", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1120, 80], "retryOnFail": true, "maxTries": 3, "waitBetweenTries": 5000, "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const source = $('Check Backup Eligibility').item.json;\nconst r = $json.body ?? $json;\nconst status = $json.statusCode;\nconst data = r.data ?? {};\nreturn [{json:{hostname:source.hostname,ip_address:source.ip_address,device_type:source.device_type,site:source.site,eligible:true,backup_id:data.backup?.id ?? r.error?.details?.backup_id ?? null,status:data.success && status < 300 ? 'success' : 'failed',backup_timestamp:data.backup?.completed_at ?? data.backup?.created_at ?? null,checksum:data.backup?.checksum ?? null,changed:data.changed ?? false,automation_log_id:data.automation_log_id ?? null,error_reason:data.success ? null : (r.error?.code ?? 'backup_request_failed')}}];"},
+      "id": "7252731f-705c-4970-837d-2fa1c74a0734", "name": "Normalize Backup Result", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1360, 80]
+    },
+    {
+      "parameters": {"jsCode": "return [{json:{hostname:$json.hostname,ip_address:$json.ip_address,device_type:$json.device_type,site:$json.site,eligible:false,status:'skipped',changed:false,error_reason:$json.skip_reason}}];"},
+      "id": "5e5413d9-2b2a-4bc5-9c0f-9f216fda9655", "name": "Record Skipped Device", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1120, 260]
+    },
+    {
+      "parameters": {"mode": "append", "options": {}},
+      "id": "c9ce20dd-43ac-47e2-ad70-ffbe07a51f90", "name": "Combine Device Results", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [1580, 160]
+    },
+    {
+      "parameters": {"jsCode": "const rows = $input.all().map(i => i.json);\nconst successes = rows.filter(r => r.status === 'success');\nconst failed = rows.filter(r => r.status === 'failed');\nconst changed = successes.filter(r => r.changed);\nconst channel = ($env.NETOPS_BACKUP_SUMMARY_CHANNEL || 'none').toLowerCase();\nif (!['telegram','email','none'].includes(channel)) throw new Error('Invalid backup summary channel');\nconst summary = {started_at:$('Capture Scheduled Start').first().json.started_at,completed_at:new Date().toISOString(),execution_id:$('Capture Scheduled Start').first().json.execution_id,total_eligible:rows.filter(r => r.eligible).length,success_count:successes.length,failed_count:failed.length,skipped_count:rows.filter(r => !r.eligible).length,changed_count:changed.length,devices:rows.map(({hostname,ip_address,device_type,site,backup_id,status,backup_timestamp,checksum,changed,error_reason,automation_log_id})=>({hostname,ip_address,device_type,site,backup_id,status,backup_timestamp,checksum,changed,error_reason,automation_log_id})),notification_channel:channel};\nsummary.notification_text = `NetOps360 backup run\\nEligible: ${summary.total_eligible} | Success: ${summary.success_count} | Failed: ${summary.failed_count} | Skipped: ${summary.skipped_count}\\nChanged configurations: ${summary.changed_count}`;\nreturn [{json:summary}];"},
+      "id": "2213caec-a646-44d6-a7ea-f09a0380397c", "name": "Build Scheduled Summary", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1800, 160]
+    },
+    {
+      "parameters": {"jsCode": "const p = $json.body ?? $json;\nconst headers = $json.headers ?? {};\nconst supplied = headers['x-netops-backup-token'] || headers['X-NetOps-Backup-Token'];\nconst expected = $env.NETOPS_BACKUP_EVENT_TOKEN || '';\nif (!expected || typeof supplied !== 'string' || supplied.length !== expected.length || !require('crypto').timingSafeEqual(Buffer.from(supplied),Buffer.from(expected))) throw new Error('Unauthorized backup event');\nif (p.event_type !== 'incident.opened' || !p.incident || typeof p.incident.id !== 'string' || typeof p.incident.title !== 'string' || !['critical','warning'].includes(p.incident.severity) || !p.device || typeof p.device.id !== 'string' || typeof p.device.hostname !== 'string' || typeof p.device.ip_address !== 'string') throw new Error('Invalid incident event');\nconst severity = p.incident.severity;\nconst supported = ['router','switch'].includes(String(p.device.device_type || '').toLowerCase());\nconst allowed = (severity === 'critical' && $env.NETOPS_BACKUP_ON_CRITICAL === 'true') || (severity === 'warning' && $env.NETOPS_BACKUP_ON_WARNING === 'true');\nif (!supported || !allowed) throw new Error('Incident does not meet the backup policy');\nreturn [{json:{device_id:p.device.id,device:{hostname:p.device.hostname,ip_address:p.device.ip_address,device_type:p.device.device_type,site:p.device.site || 'Unspecified'},incident_id:p.incident.id,severity}}];"},
+      "id": "913643b5-11dc-41f8-933b-f8e5beb74c6d", "name": "Authenticate and Validate Incident", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 560]
+    },
+    {
+      "parameters": {"method": "POST", "url": "={{$env.NETOPS_FLASK_BASE_URL}}/api/devices/{{$json.device_id}}/backup", "sendHeaders": true, "headerParameters": {"parameters": [{"name": "Authorization", "value": "={{'Bearer ' + $env.NETOPS_BACKUP_API_TOKEN}}"}, {"name": "X-N8N-Execution-Id", "value": "={{String($execution.id)}}"}]}, "sendBody": true, "specifyBody": "json", "jsonBody": "={{ { backup_type: 'incident_triggered', incident_id: $json.incident_id } }}", "options": {"timeout": 120000, "batching": {"batch": {"batchSize": 1, "batchInterval": 1000}}, "response": {"response": {"fullResponse": true, "neverError": true, "responseFormat": "json"}}}},
+      "id": "0cb0854f-0688-48cc-a9ca-0f32403e09c5", "name": "Run Incident Backup", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [660, 560], "retryOnFail": false, "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const source = $('Authenticate and Validate Incident').item.json;\nconst r = $json.body ?? $json;\nreturn [{json:{success:Boolean(r.data?.success),duplicate:Boolean(r.data?.duplicate),incident_id:source.incident_id,device:source.device,backup:r.data?.backup ?? null,automation_log_id:r.data?.automation_log_id ?? null,error:r.error?.code ?? null}}];"},
+      "id": "f90506fa-2642-4d3c-92f0-d1d8789a69a2", "name": "Incident Backup Summary", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [900, 560]
+    },
+    {
+      "parameters": {"rules": {"values": [{"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{$json.notification_channel}}", "rightValue": "telegram", "operator": {"type": "string", "operation": "equals"}, "id": "telegram-summary"}], "combinator": "and"}, "renameOutput": true, "outputKey": "telegram"}, {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{$json.notification_channel}}", "rightValue": "email", "operator": {"type": "string", "operation": "equals"}, "id": "email-summary"}], "combinator": "and"}, "renameOutput": true, "outputKey": "email"}, {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{$json.notification_channel}}", "rightValue": "none", "operator": {"type": "string", "operation": "equals"}, "id": "none-summary"}], "combinator": "and"}, "renameOutput": true, "outputKey": "none"}]}, "options": {}},
+      "id": "0cfc61f1-59ec-49e2-85df-7bb6ea56346d", "name": "Choose Summary Channel", "type": "n8n-nodes-base.switch", "typeVersion": 3.2, "position": [2020, 160]
+    },
+    {
+      "parameters": {"method": "POST", "url": "=https://api.telegram.org/bot{{$env.NETOPS_TELEGRAM_BOT_TOKEN}}/sendMessage", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ {chat_id:$env.NETOPS_TELEGRAM_CHAT_ID,text:$json.notification_text} }}", "options": {"timeout": 10000}},
+      "id": "f11dfc04-fdfc-4bb5-95ea-9e599f24f54e", "name": "Send Telegram Summary", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2260, 80], "retryOnFail": true, "maxTries": 3, "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.NETOPS_BACKUP_SUMMARY_FROM}}", "toEmail": "={{$env.NETOPS_BACKUP_SUMMARY_TO}}", "subject": "NetOps360 scheduled configuration backup summary", "text": "={{$json.notification_text}}", "options": {}},
+      "id": "d4a2603f-9703-4be8-bb62-b42f37e2741a", "name": "Send Email Summary", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [2260, 200], "credentials": {"smtp": {"name": "NetOps360 SMTP"}}, "retryOnFail": true, "maxTries": 3, "waitBetweenTries": 1000
+    }
+  ],
+  "connections": {
+    "Daily at 02:00": {"main": [[{"node": "Capture Scheduled Start", "type": "main", "index": 0}]]},
+    "Capture Scheduled Start": {"main": [[{"node": "Get Flask Device Inventory", "type": "main", "index": 0}]]},
+    "Get Flask Device Inventory": {"main": [[{"node": "Check Backup Eligibility", "type": "main", "index": 0}]]},
+    "Check Backup Eligibility": {"main": [[{"node": "Eligible Device?", "type": "main", "index": 0}]]},
+    "Eligible Device?": {"main": [[{"node": "Run Scheduled Backup", "type": "main", "index": 0}], [{"node": "Record Skipped Device", "type": "main", "index": 0}]]},
+    "Run Scheduled Backup": {"main": [[{"node": "Normalize Backup Result", "type": "main", "index": 0}]]},
+    "Normalize Backup Result": {"main": [[{"node": "Combine Device Results", "type": "main", "index": 0}]]},
+    "Record Skipped Device": {"main": [[{"node": "Combine Device Results", "type": "main", "index": 1}]]},
+    "Combine Device Results": {"main": [[{"node": "Build Scheduled Summary", "type": "main", "index": 0}]]},
+    "Build Scheduled Summary": {"main": [[{"node": "Choose Summary Channel", "type": "main", "index": 0}]]},
+    "Choose Summary Channel": {"main": [[{"node": "Send Telegram Summary", "type": "main", "index": 0}], [{"node": "Send Email Summary", "type": "main", "index": 0}], []]},
+    "Incident Backup Webhook": {"main": [[{"node": "Authenticate and Validate Incident", "type": "main", "index": 0}]]},
+    "Authenticate and Validate Incident": {"main": [[{"node": "Run Incident Backup", "type": "main", "index": 0}]]},
+    "Run Incident Backup": {"main": [[{"node": "Incident Backup Summary", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1", "timezone": "Africa/Nairobi", "saveManualExecutions": false, "saveDataErrorExecution": "none", "saveDataSuccessExecution": "none"},
+  "versionId": "d319ac4a-f86c-4f42-9dad-7557ed1e8c71",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}

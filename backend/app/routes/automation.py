@@ -4,9 +4,19 @@ from app.extensions import get_container
 from app.models.constants import AUTOMATION_STATUSES
 from app.utils.auth import require_permission
 from app.utils.responses import ok, ok_list
-from app.utils.validators import parse_pagination, validate_choice, validate_uuid
+from app.utils.validators import json_body, parse_pagination, validate_choice, validate_uuid
 
 bp = Blueprint("automation", __name__, url_prefix="/api/automation")
+
+
+@bp.post("/callback")
+def callback():
+    """n8n-only callback; authentication is an HMAC over the exact request bytes."""
+    payload = json_body(request)
+    result = get_container().automation.complete_callback(
+        request.get_data(cache=True), request.headers.get("X-NetOps-Signature"), payload,
+    )
+    return ok(result)
 
 
 @bp.get("/logs")

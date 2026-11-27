@@ -51,6 +51,21 @@ def test_packet_loss_rule_boundary(engine, repo):
     assert "High Packet Loss" not in {e["rule"]["name"] for e in below if e["triggered"]}
 
 
+def test_company_rule_is_not_evaluated_for_another_company(engine):
+    company_a = "30000000-0000-4000-8000-000000000001"
+    company_b = "30000000-0000-4000-8000-000000000002"
+    company_rule = {"id": "rule-a", "name": "Company A secret threshold",
+                    "metric": "device_status", "operator": "eq", "threshold": "Offline",
+                    "severity": "critical", "enabled": True, "scope": "global",
+                    "device_id": None, "company_id": company_a}
+    unrelated = engine.evaluate(ping_result("Offline", None, None), [company_rule],
+                                company_id=company_b)
+    owned = engine.evaluate(ping_result("Offline", None, None), [company_rule],
+                            company_id=company_a)
+    assert unrelated == []
+    assert len(owned) == 1 and owned[0]["triggered"] is True
+
+
 def test_missing_metric_is_not_evaluable(engine, repo):
     evals = engine.evaluate(ping_result("Offline", None, None), repo.list_rules())
     by_name = {e["rule"]["name"]: e for e in evals}

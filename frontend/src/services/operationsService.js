@@ -24,6 +24,9 @@ export async function resolveIncident(id) {
 export async function fetchAutomationLogs(params) {
   return listData(await apiRequest(`/api/automation/logs${queryString(params)}`));
 }
+export async function fetchBackups(params) {
+  return listData(await apiRequest(`/api/backups${queryString(params)}`));
+}
 export async function retryAutomation(id) {
   return resourceData(await apiRequest(`/api/automation/retry/${encodeURIComponent(id)}`, { method: "POST" }));
 }
@@ -33,9 +36,11 @@ export async function fetchMonitoringHistory(params) {
 
 export async function fetchUsers(params) { return listData(await apiRequest(`/api/users${queryString(params)}`)); }
 export async function inviteUser(body) { return resourceData(await apiRequest("/api/users/invite", { method: "POST", body: JSON.stringify(body) })); }
+export async function acceptInvitation() { return resourceData(await apiRequest("/api/users/accept-invitation", { method: "POST", body: JSON.stringify({}) })); }
 export async function updateUser(id, body) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) })); }
 export async function setUserStatus(id, status) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}/status`, { method: "PATCH", body: JSON.stringify({ status }) })); }
 export async function fetchRoles() { return resourceData(await apiRequest("/api/roles")); }
 export async function assignUserRole(id, role_id) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}/roles`, { method: "POST", body: JSON.stringify({ role_id }) })); }
 export async function removeUserRole(id, roleId) { return apiRequest(`/api/users/${encodeURIComponent(id)}/roles/${encodeURIComponent(roleId)}`, { method: "DELETE" }); }
 export async function fetchUserAudit(id) { return listData(await apiRequest(`/api/users/${encodeURIComponent(id)}/audit-logs`)); }
+export async function fetchCompanyAudit(params) { return listData(await apiRequest(`/api/company/audit-logs${queryString(params)}`)); }

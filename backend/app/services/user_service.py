@@ -2,8 +2,10 @@
 import logging
 import re
 import uuid
+from datetime import timedelta
 
 from app.utils.exceptions import ConflictError, DatabaseError, ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
+from app.utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -20,13 +22,15 @@ class UserService:
     def _safe_profile(profile):
         return {key: profile.get(key) for key in (
             "id", "full_name", "email", "phone_number", "account_status", "created_at",
-            "updated_at", "last_login_at", "company_name",
+            "updated_at", "last_login_at", "company_name", "company_id",
         )}
 
-    def list_users(self, limit, offset, search=None, status=None):
+    def list_users(self, actor_id, limit, offset, search=None, status=None):
         if status not in (None, "active", "pending", "suspended"):
             raise ValidationError("status must be active, pending, or suspended.")
-        rows, total = self.repo.list_profiles(limit=limit, offset=offset, search=search, status=status)
+        company_id = self._managed_company_id(actor_id)
+        rows, total = self.repo.list_profiles(limit=limit, offset=offset, search=search,
+                                              status=status, company_id=company_id)
         result = []
         for profile in rows:
             row = self._safe_profile(profile)
@@ -35,15 +39,36 @@ class UserService:
             result.append(row)
         return result, total
 
-    def get_user(self, user_id):
+    def get_user(self, user_id, actor_id=None):
         user_id = self._validate_id(user_id, "user_id")
         profile = self.repo.get_profile(user_id)
         if not profile:
             raise NotFoundError("User not found.")
+        if actor_id:
+            self._assert_target_company(actor_id, profile)
         row = self._safe_profile(profile)
         row["roles"] = [item["role"] for item in self.repo.list_user_role_rows(user_id)
                         if item.get("role")]
         return row
+
+    def _managed_company_id(self, actor_id):
+        actor_id = self._validate_id(actor_id, "actor_id")
+        if "company_admin" not in set(self.repo.get_user_roles(actor_id)):
+            return None
+        profile = self.repo.get_profile(actor_id)
+        if not profile or not profile.get("company_id"):
+            raise ForbiddenError("Company Admin is not associated with a registered company.")
+        return str(profile["company_id"])
+
+    def _assert_target_company(self, actor_id, target):
+        company_id = self._managed_company_id(actor_id)
+        if company_id and str(target.get("company_id") or "") != company_id:
+            raise NotFoundError("User not found.")
+        if company_id and str(target.get("id")) == str(actor_id):
+            raise ForbiddenError("Company Admins cannot modify their own account through user management.")
+        target_roles = set(self.repo.get_user_roles(target["id"])) if company_id else set()
+        if company_id and target_roles.intersection({"admin", "super_admin", "company_admin"}):
+            raise ForbiddenError("Administrator accounts cannot be managed by a Company Admin.")
 
     @staticmethod
     def _validate_id(value, field):
@@ -69,32 +94,22 @@ class UserService:
             raise ConflictError("A user with this email already exists.")
         actor_id = self._validate_id(actor_id, "actor_id")
         actor_roles = set(self.repo.get_user_roles(actor_id))
-        is_company_admin = "admin" in actor_roles and "super_admin" not in actor_roles
-        company_name = None
-        if is_company_admin:
-            actor_profile = self.repo.get_profile(actor_id)
-            company_name = (actor_profile or {}).get("company_name")
-            role_id = self._validate_id(payload["role_id"], "role_id") if payload.get("role_id") else None
-            role = self.repo.get_role(role_id) if role_id else self.repo.get_role_by_name("viewer")
-            if not role:
-                raise ServiceUnavailableError("The initial Viewer role is not configured.")
-            if role["name"] not in ("network_operator", "viewer"):
-                raise ForbiddenError("Company Admins may invite only network_operator or viewer users.")
-            if self.assistant_invite_count(actor_id) >= 1:
-                raise ForbiddenError("Company Admin accounts can invite at most 1 assistant user.")
-        else:
-            role_id = self._validate_id(payload["role_id"], "role_id") if payload.get("role_id") else None
-            role = self.repo.get_role(role_id) if role_id else self.repo.get_role_by_name("viewer")
-            if not role:
-                raise ServiceUnavailableError("The initial Viewer role is not configured.")
+        if "company_admin" not in actor_roles:
+            raise ForbiddenError("Invitations must be issued by a Company Admin.")
+        actor_profile = self.repo.get_profile(actor_id)
+        company_name = (actor_profile or {}).get("company_name")
+        company_id = (actor_profile or {}).get("company_id")
+        if not company_id:
+            raise ForbiddenError("Company Admin is not associated with a registered company.")
+        role_id = self._validate_id(payload["role_id"], "role_id") if payload.get("role_id") else None
+        role = self.repo.get_role(role_id) if role_id else self.repo.get_role_by_name("viewer")
+        if not role:
+            raise ServiceUnavailableError("The initial Viewer role is not configured.")
+        if role["name"] not in ("network_operator", "viewer"):
+            raise ForbiddenError("Company Admins may invite only network_operator or viewer users.")
         self._ensure_role_within_authority(actor_id, role)
         if self.auth_admin is None:
             raise ServiceUnavailableError("Supabase Auth administration is unavailable.")
-
-        if is_company_admin and not self.repo.reserve_company_assistant_invite(
-            actor_id, email, company_name,
-        ):
-            raise ForbiddenError("Company Admin accounts can invite at most 1 assistant user.")
 
         invited_id = None
         try:
@@ -108,38 +123,36 @@ class UserService:
                 raw_id = user.get("id")
             invited_id = str(raw_id or "")
             invited_id = self._validate_id(invited_id, "invited user id")
-            profile = self.repo.create_profile({
-                "id": invited_id, "full_name": name.strip(), "email": email,
+            expires_at = (utcnow() + timedelta(hours=24)).isoformat()
+            provisioned = self.repo.provision_company_invitation({
+                "user_id": invited_id, "email": email, "full_name": name.strip(),
                 "phone_number": phone.strip() if isinstance(phone, str) and phone.strip() else None,
-                "account_status": "pending", "company_name": company_name,
-                "invited_by": actor_id,
+                "role_id": role["id"], "invited_by": actor_id, "expires_at": expires_at,
             })
-            self.repo.assign_user_role(invited_id, role["id"], actor_id)
-            profile = self.repo.update_profile(invited_id, {"account_status": "active"})
+            profile = provisioned.get("profile")
+            invitation = provisioned.get("invitation")
+            if not profile or not invitation:
+                raise DatabaseError("Company invitation provisioning did not complete.")
             self.audit.record("invited", "user", row=profile)
-            return self.get_user(invited_id)
+            return {**self.get_user(invited_id), "invitation": invitation}
         except (ValidationError, ConflictError, ForbiddenError):
             self._rollback_invitation(invited_id)
-            if is_company_admin:
-                self.repo.cancel_company_assistant_invite(actor_id, email)
             raise
         except Exception as exc:
             self._rollback_invitation(invited_id)
-            if is_company_admin:
-                self.repo.cancel_company_assistant_invite(actor_id, email)
             if isinstance(exc, DatabaseError):
                 raise
             logger.error("Supabase user invitation failed (%s)", type(exc).__name__)
             raise ServiceUnavailableError("The user invitation could not be completed.") from None
 
-    def assistant_invite_count(self, actor_id):
-        actor_id = self._validate_id(actor_id, "actor_id")
-        profile = self.repo.get_profile(actor_id)
+    def accept_invitation(self, user_id):
+        user_id = self._validate_id(user_id, "user_id")
+        result = self.repo.accept_company_invitation(user_id)
+        profile = result.get("profile") if isinstance(result, dict) else None
         if not profile:
-            raise NotFoundError("User not found.")
-        return self.repo.count_company_assistant_users(
-            actor_id, profile.get("company_name"),
-        )
+            raise NotFoundError("No active invitation was found for this account.")
+        self.audit.record("invitation_accepted", "user", row=profile)
+        return self.get_user(user_id)
 
     def _rollback_invitation(self, user_id):
         if not user_id or self.auth_admin is None:
@@ -149,13 +162,14 @@ class UserService:
         except Exception as exc:
             logger.error("Auth invitation compensation failed (%s)", type(exc).__name__)
 
-    def update_user(self, user_id, payload):
+    def update_user(self, user_id, payload, actor_id):
         user_id = self._validate_id(user_id, "user_id")
         if not isinstance(payload, dict) or not payload or set(payload) - {"full_name", "phone_number"}:
             raise ValidationError("Only full_name and phone_number can be updated here.")
         before = self.repo.get_profile(user_id)
         if not before:
             raise NotFoundError("User not found.")
+        self._assert_target_company(actor_id, before)
         changes = {}
         if "full_name" in payload:
             value = payload["full_name"]
@@ -179,12 +193,18 @@ class UserService:
         before = self.repo.get_profile(user_id)
         if not before:
             raise NotFoundError("User not found.")
+        self._assert_target_company(actor_id, before)
+        if before.get("account_status") == "pending":
+            raise ForbiddenError("Pending accounts must accept their invitation before activation.")
         if before["account_status"] == status:
             return self.get_user(user_id)
         if self.auth_admin is None:
             raise ServiceUnavailableError("Supabase Auth administration is unavailable.")
         if status == "suspended":
-            after = self.repo.update_profile(user_id, {"account_status": status})
+            after = self.repo.update_profile(user_id, {
+                "account_status": status,
+                "sessions_revoked_at": utcnow().isoformat(),
+            })
             try:
                 self.auth_admin.update_user_by_id(user_id, {"ban_duration": "876000h"})
             except Exception as exc:
@@ -201,6 +221,13 @@ class UserService:
         return self.get_user(user_id)
 
     def _ensure_role_within_authority(self, actor_id, role):
+        actor_roles = set(self.repo.get_user_roles(actor_id))
+        if role["name"] == "company_admin":
+            raise ForbiddenError("Company Admin is assigned only by company registration.")
+        if "company_admin" in actor_roles:
+            if role["name"] not in ("network_operator", "viewer"):
+                raise ForbiddenError("Company Admins may assign only network_operator or viewer users.")
+            return
         actor_permissions = set(self.repo.get_user_permissions(actor_id))
         target_permissions = set(self.repo.get_role_permissions(role["id"]))
         if role["name"] == "super_admin" and "system.manage" not in actor_permissions:
@@ -216,6 +243,9 @@ class UserService:
         role = self.repo.get_role(role_id)
         if not target or not role:
             raise NotFoundError("User or role not found.")
+        self._assert_target_company(actor_id, target)
+        if role["name"] == "company_admin":
+            raise ForbiddenError("Company Admin is assigned only by company registration.")
         self._ensure_role_within_authority(actor_id, role)
         if user_id == actor_id and role["name"] == "super_admin" and "super_admin" not in self.repo.get_user_roles(actor_id):
             raise ForbiddenError("You cannot promote yourself to Super Admin.")
@@ -231,6 +261,9 @@ class UserService:
         role = self.repo.get_role(role_id)
         if not target or not role:
             raise NotFoundError("User or role not found.")
+        self._assert_target_company(actor_id, target)
+        if role["name"] == "company_admin":
+            raise ConflictError("Transfer company administration before removing this role.")
         self._ensure_role_within_authority(actor_id, role)
         before = next((item for item in self.repo.list_user_role_rows(user_id)
                        if item["role_id"] == role_id), None)
@@ -245,3 +278,9 @@ class UserService:
 
     def get_permissions(self):
         return self.repo.list_permissions()
+
+    def company_audit_logs(self, actor_id, limit=50, offset=0):
+        company_id = self._managed_company_id(actor_id)
+        if not company_id:
+            raise ForbiddenError("Company audit history is available to Company Admins only.")
+        return self.repo.list_company_audit_logs(company_id, limit, offset)
