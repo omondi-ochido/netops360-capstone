@@ -57,3 +57,60 @@ def test_identity_endpoint_and_logout_revoke_session(make_app, repo):
     assert "users.create" in response.get_json()["data"]["permissions"]
     assert client.post("/api/auth/logout", headers=headers).status_code == 200
     assert client.get("/api/devices", headers=headers).status_code == 401
+
+
+def test_first_authenticated_identity_is_provisioned_as_super_admin(make_app, repo):
+    identity = {
+        "sub": "30000000-0000-4000-8000-000000000001",
+        "session_id": "40000000-0000-4000-8000-000000000001",
+        "exp": time.time() + 3600,
+        "iss": "https://project.example/auth/v1",
+        "aud": "authenticated",
+        "email": "founder@example.invalid",
+        "app_metadata": {"provider": "google"},
+        "user_metadata": {"full_name": "Company Founder", "company_name": "Example Co"},
+    }
+    client = authenticated_app(make_app, repo, identity).test_client()
+
+    response = client.get("/api/devices", headers={"Authorization": "Bearer test-token"})
+
+    assert response.status_code == 200
+    profile = repo.get_profile(identity["sub"])
+    assert profile["full_name"] == "Company Founder"
+    assert profile["company_name"] == "Example Co"
+    assert repo.get_user_roles(identity["sub"]) == ["super_admin"]
+
+
+def test_additional_oauth_identity_gets_viewer_role(make_app, repo):
+    founder = setup_identity(repo, role="super_admin")
+    identity = {
+        "sub": "30000000-0000-4000-8000-000000000002",
+        "session_id": "40000000-0000-4000-8000-000000000002",
+        "exp": time.time() + 3600,
+        "iss": founder["iss"],
+        "aud": "authenticated",
+        "email": "oauth@example.invalid",
+        "app_metadata": {"provider": "google"},
+        "user_metadata": {"full_name": "OAuth User", "company_name": "Other Co"},
+    }
+    client = authenticated_app(make_app, repo, identity).test_client()
+
+    response = client.get("/api/devices", headers={"Authorization": "Bearer test-token"})
+
+    assert response.status_code == 200
+    assert repo.get_user_roles(identity["sub"]) == ["viewer"]
+
+
+def test_company_onboarding_updates_profile(make_app, repo):
+    identity = setup_identity(repo, role="admin")
+    identity["email"] = "auth-test@example.invalid"
+    client = authenticated_app(make_app, repo, identity).test_client()
+
+    response = client.post(
+        "/api/auth/onboard-company",
+        json={"full_name": "Auth Test", "company_name": "Example Co"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200
+    assert repo.get_profile(identity["sub"])["company_name"] == "Example Co"

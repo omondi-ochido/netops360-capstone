@@ -1,4 +1,4 @@
-"""Configuration backups over SSH (Netmiko / VyOS). Credentials come from the environment."""
+"""Configuration backups over SSH (Netmiko / VyOS and Linux switches)."""
 import hashlib
 import logging
 

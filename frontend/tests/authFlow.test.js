@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sendRecoveryCode, signInWithProvider, updatePassword, verifyRecoveryCode } from "../src/services/authService.js";
+import { sendRecoveryCode, signInWithProvider, signUpCompany, updatePassword, verifyRecoveryCode } from "../src/services/authService.js";
 import { setSupabaseClientForTests } from "../src/services/supabaseClient.js";
 
 test("recovery sends email, verifies the recovery OTP type, and updates the password", async () => {
@@ -38,6 +38,32 @@ test("social login preserves the provider and redirects back to the app", async 
     if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
   }
   assert.deepEqual(calls.map((call) => call.provider), ["google", "github", "azure"]);
-  assert.equal(calls[0].options.redirectTo, "https://netops.example/");
+  assert.equal(calls[0].options.redirectTo, "https://netops.example/auth/callback");
   assert.equal(calls[2].options.scopes, "email");
+});
+
+test("company sign-up stores profile metadata and targets the auth callback", async () => {
+  const calls = [];
+  setSupabaseClientForTests({ auth: {
+    signUp: async (...args) => { calls.push(args); return { data: { session: null }, error: null }; },
+  } });
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { origin: "https://netops.example" } };
+  try {
+    const result = await signUpCompany({
+      email: " founder@example.com ", full_name: " Founder ", password: "twelve-character-password",
+      company_name: " Example Co ",
+    });
+    assert.equal(result.hasSession, false);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
+  }
+  assert.deepEqual(calls[0][0], {
+    email: "founder@example.com",
+    password: "twelve-character-password",
+    options: {
+      data: { full_name: "Founder", company_name: "Example Co" },
+      emailRedirectTo: "https://netops.example/auth/callback",
+    },
+  });
 });

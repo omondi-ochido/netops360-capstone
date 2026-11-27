@@ -2,6 +2,8 @@ import { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import Layout from "./components/layout/Layout";
 import Login from "./pages/Login";
+import SignUp from "./pages/SignUp";
+import AuthCallback from "./pages/AuthCallback";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import AcceptInvite from "./pages/AcceptInvite";
@@ -40,6 +42,8 @@ function AppRoutes() {
   const { user, loading } = useAuth();
   return <Routes>
     <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
+    <Route path="/signup" element={user ? <Navigate to="/" replace /> : <SignUp />} />
+    <Route path="/auth/callback" element={<AuthCallback />} />
     <Route path="/forgot-password" element={<ForgotPassword />} />
     <Route path="/reset-password" element={<ResetPassword />} />
     <Route path="/accept-invite" element={<AcceptInvite />} />

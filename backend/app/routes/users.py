@@ -18,6 +18,7 @@ def list_users():
 
 
 @bp.post("/users")
+@bp.post("/users/invite")
 @require_permission("users.create")
 def create_user():
     user = get_container().users.invite_user(json_body(request), g.auth_identity["sub"])

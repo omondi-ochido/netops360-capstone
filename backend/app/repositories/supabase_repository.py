@@ -115,6 +115,16 @@ class SupabaseRepository:
     def create_profile(self, data):
         return _first(_execute(self._t("profiles").insert(data)))
 
+    def provision_auth_profile(self, data, default_role):
+        response = _execute(self.client.rpc("provision_auth_profile", {
+            "p_user_id": str(data["id"]),
+            "p_email": data["email"],
+            "p_full_name": data["full_name"],
+            "p_company_name": data.get("company_name"),
+            "p_default_role": default_role,
+        }))
+        return _rpc_row(response)
+
     def update_profile(self, user_id, data):
         return _first(_execute(self._t("profiles").update(data).eq("id", str(user_id))))
 
@@ -173,6 +183,41 @@ class SupabaseRepository:
             return 0
         return len(_execute(self._t("profiles").select("id").in_("id", user_ids)
                             .eq("account_status", "active")).data)
+
+    def count_company_assistant_users(self, actor_id, company_name):
+        response = _execute(self.client.rpc("count_company_assistant_users", {
+            "p_actor_id": str(actor_id),
+            "p_company_name": company_name,
+        }))
+        value = _rpc_row(response)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, dict):
+            count = value.get("count_company_assistant_users")
+            if isinstance(count, int):
+                return count
+        raise DatabaseError("The company assistant invite count could not be retrieved.")
+
+    def reserve_company_assistant_invite(self, actor_id, invitee_email, company_name):
+        response = _execute(self.client.rpc("reserve_company_assistant_invite", {
+            "p_actor_id": str(actor_id),
+            "p_invitee_email": invitee_email.lower(),
+            "p_company_name": company_name,
+        }))
+        value = _rpc_row(response)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, dict):
+            reserved = value.get("reserve_company_assistant_invite")
+            if isinstance(reserved, bool):
+                return reserved
+        raise DatabaseError("The company assistant invite slot could not be reserved.")
+
+    def cancel_company_assistant_invite(self, actor_id, invitee_email):
+        _execute(self.client.rpc("cancel_company_assistant_invite", {
+            "p_actor_id": str(actor_id),
+            "p_invitee_email": invitee_email.lower(),
+        }))
 
     def list_user_audit_logs(self, user_id, limit=50, offset=0):
         return _execute(self._t("audit_logs").select("*").eq("actor_user_id", str(user_id))

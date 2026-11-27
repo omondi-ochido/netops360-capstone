@@ -131,6 +131,32 @@ def test_run_cycle_checks_only_monitored_devices(repo, container):
     assert container.monitoring.run_cycle() == []
 
 
+def test_production_switches_are_monitored_over_tcp_22(repo, container, monkeypatch):
+    container.config.testing = False
+    container.config.auth_test_bypass = False
+    container.monitoring._ping = lambda *a, **k: ping_result("Online", 1.0, 0.0)
+    tcp_calls = []
+
+    def check_tcp(ip_address, port=22, timeout=1.5):
+        tcp_calls.append((ip_address, port))
+        return {**ping_result("Online", 2.5, 0.0), "check_type": "tcp"}
+
+    monkeypatch.setattr("app.services.monitoring_service._check_tcp", check_tcp)
+    results = container.monitoring.run_cycle()
+
+    switch_ips = {"192.168.100.2", "192.168.10.2", "192.168.10.3"}
+    assert set(tcp_calls) == {(ip_address, 22) for ip_address in switch_ips}
+    assert all(
+        result["status"] == "Online" and result["latency_ms"] == 2.5
+        for result in results if result["hostname"] in {"MANAGEMENT-SW", "SW1", "SW2"}
+    )
+    assert all(
+        repo.list_monitoring_logs(device_id=repo.get_device_by_hostname(hostname)["id"])[0]["check_type"]
+        == "tcp"
+        for hostname in ("MANAGEMENT-SW", "SW1", "SW2")
+    )
+
+
 def test_run_cycle_survives_a_crashing_check(repo, container):
     calls = {"n": 0}
 

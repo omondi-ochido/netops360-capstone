@@ -32,8 +32,9 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
 
   const device = liveDevice;
   const deviceType = device?.deviceType?.toLowerCase();
+  const isSwitch = deviceType === "switch";
   const canBackup = device?.sshEnabled || deviceType === "router" || deviceType === "switch";
-  const monitoringProtocol = device?.monitoringMethod?.toLowerCase() === "tcp" ? "tcp" : "icmp";
+  const monitoringProtocol = isSwitch || device?.monitoringMethod?.toLowerCase() === "tcp" ? "tcp" : "icmp";
   const chronologicalHistory = [...history].sort(
     (left, right) => new Date(left.checked_at) - new Date(right.checked_at),
   );
@@ -165,7 +166,7 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
                 id="device-monitoring-protocol"
                 className="device-select-filter"
                 value={monitoringProtocol}
-                disabled={isUpdatingProtocol}
+                disabled={isUpdatingProtocol || isSwitch}
                 onChange={(event) => void handleProtocolChange(event)}
               >
                 <option value="icmp">ICMP</option>
@@ -174,7 +175,16 @@ function DeviceDetails({ deviceId, device: selectedDevice, onBack }) {
               <strong><span className="status-badge neutral">{monitoringProtocol.toUpperCase()}</span></strong>
               {protocolError && <p role="alert">{protocolError}</p>}
             </div>
-            <div><label>Monitoring</label><strong>{device.monitoringEnabled ? `Enabled every ${device.monitorIntervalSeconds}s` : "Paused"}</strong></div>
+            <div>
+              <label>Monitoring</label>
+              <strong>
+                {isSwitch
+                  ? `Enabled via TCP/22 every ${device.monitorIntervalSeconds || 5}s`
+                  : device.monitoringEnabled
+                    ? `Enabled every ${device.monitorIntervalSeconds}s`
+                    : "Paused"}
+              </strong>
+            </div>
           </div>
         </div>
 

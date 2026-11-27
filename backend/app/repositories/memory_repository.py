@@ -50,6 +50,7 @@ class InMemoryRepository:
                                   "description": key, "resource": key.split(".")[0], "action": key.split(".")[1]}
                             for key in PERMISSION_KEYS}
         self.user_roles = []
+        self.assistant_invite_reservations = {}
         self.revoked_sessions = {}
 
     # ------------------------------------------------------------------ health
@@ -80,6 +81,45 @@ class InMemoryRepository:
                "created_at": now_iso(), "updated_at": now_iso(), **data}
         self.profiles[str(row["id"])] = row
         return copy.deepcopy(row)
+
+    @guarded
+    def provision_auth_profile(self, data, default_role):
+        user_id = str(data["id"])
+        profile = self.profiles.get(user_id)
+        if profile is None:
+            profile = {
+                "id": user_id, "phone_number": None, "account_status": "active",
+                "last_login_at": None, "created_at": now_iso(), "updated_at": now_iso(),
+                "company_name": None, "invited_by": None, **data,
+            }
+            if any(row["email"].lower() == profile["email"].lower()
+                   for row in self.profiles.values()):
+                raise ConflictError("A user with this email already exists.")
+            self.profiles[user_id] = profile
+        else:
+            if any(
+                row["id"] != user_id and row["email"].lower() == data["email"].lower()
+                for row in self.profiles.values()
+            ):
+                raise ConflictError("A user with this email already exists.")
+            profile.update({
+                "email": data["email"],
+                "full_name": data["full_name"],
+                "company_name": data.get("company_name") or profile.get("company_name"),
+                "updated_at": now_iso(),
+            })
+
+        roles = self.get_user_roles(user_id)
+        if profile["account_status"] == "active" and not roles:
+            has_super_admin = any(
+                self.roles.get(row["role_id"], {}).get("name") == "super_admin"
+                for row in self.user_roles
+            )
+            role_name = default_role if has_super_admin else "super_admin"
+            role = self.get_role_by_name(role_name)
+            self.assign_user_role(user_id, role["id"], None)
+            roles = [role_name]
+        return {"profile": copy.deepcopy(profile), "roles": roles}
 
     @guarded
     def list_profiles(self, limit=50, offset=0, search=None, status=None):
@@ -157,7 +197,8 @@ class InMemoryRepository:
         if str(user_id) not in self.profiles or str(role_id) not in self.roles:
             raise ValidationError("User or role does not exist.")
         row = {"id": str(uuid.uuid4()), "user_id": str(user_id), "role_id": str(role_id),
-               "assigned_by": str(assigned_by), "assigned_at": now_iso()}
+               "assigned_by": str(assigned_by) if assigned_by is not None else None,
+               "assigned_at": now_iso()}
         self.user_roles.append(row)
         return copy.deepcopy(row)
 
@@ -178,6 +219,54 @@ class InMemoryRepository:
         role_id = next(r["id"] for r in self.roles.values() if r["name"] == "super_admin")
         return sum(1 for row in self.user_roles if row["role_id"] == role_id
                    and self.profiles.get(row["user_id"], {}).get("account_status") == "active")
+
+    @guarded
+    def count_company_assistant_users(self, actor_id, company_name):
+        actor_id = str(actor_id)
+        used_emails = set()
+        for profile in self.profiles.values():
+            if profile["id"] == actor_id:
+                continue
+            roles = set(self.get_user_roles(profile["id"]))
+            invited_by_actor = str(profile.get("invited_by") or "") == actor_id
+            in_company = (
+                bool(company_name)
+                and (profile.get("company_name") or "").casefold() == company_name.casefold()
+                and bool(roles.intersection({"network_operator", "viewer"}))
+            )
+            if invited_by_actor or in_company:
+                used_emails.add(profile["email"].lower())
+        for reservation in self.assistant_invite_reservations.values():
+            if (
+                reservation["status"] == "reserved"
+                and (
+                    reservation["invited_by"] == actor_id
+                    or (
+                        company_name
+                        and (reservation.get("company_name") or "").casefold() == company_name.casefold()
+                    )
+                )
+            ):
+                used_emails.add(reservation["invitee_email"].lower())
+        return len(used_emails)
+
+    @guarded
+    def reserve_company_assistant_invite(self, actor_id, invitee_email, company_name):
+        actor_id = str(actor_id)
+        if self.count_company_assistant_users(actor_id, company_name) >= 1:
+            return False
+        key = (actor_id, invitee_email.lower())
+        self.assistant_invite_reservations[key] = {
+            "invited_by": actor_id,
+            "invitee_email": invitee_email.lower(),
+            "company_name": company_name,
+            "status": "reserved",
+        }
+        return True
+
+    @guarded
+    def cancel_company_assistant_invite(self, actor_id, invitee_email):
+        self.assistant_invite_reservations.pop((str(actor_id), invitee_email.lower()), None)
 
     @guarded
     def list_user_audit_logs(self, user_id, limit=50, offset=0):

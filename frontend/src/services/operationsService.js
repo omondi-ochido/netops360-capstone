@@ -32,7 +32,7 @@ export async function fetchMonitoringHistory(params) {
 }
 
 export async function fetchUsers(params) { return listData(await apiRequest(`/api/users${queryString(params)}`)); }
-export async function inviteUser(body) { return resourceData(await apiRequest("/api/users", { method: "POST", body: JSON.stringify(body) })); }
+export async function inviteUser(body) { return resourceData(await apiRequest("/api/users/invite", { method: "POST", body: JSON.stringify(body) })); }
 export async function updateUser(id, body) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) })); }
 export async function setUserStatus(id, status) { return resourceData(await apiRequest(`/api/users/${encodeURIComponent(id)}/status`, { method: "PATCH", body: JSON.stringify({ status }) })); }
 export async function fetchRoles() { return resourceData(await apiRequest("/api/roles")); }

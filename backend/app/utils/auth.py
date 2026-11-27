@@ -132,6 +132,10 @@ def _authenticate():
     identity = verifier(token, config)
     try:
         profile = container.repo.get_profile(identity["sub"])
+        if profile and profile.get("account_status") != "active":
+            raise AuthError("This account is not active.", code="account_inactive")
+        if not profile or not container.repo.get_user_roles(identity["sub"]):
+            profile = container.auth.provision_identity(identity)
     except DatabaseError:
         raise
     if not profile or profile.get("account_status") != "active":

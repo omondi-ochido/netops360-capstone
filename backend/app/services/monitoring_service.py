@@ -208,10 +208,10 @@ class MonitoringService:
                 and not self.config.auth_test_bypass
                 and str(device.get("device_type", "")).lower() == "switch"
             ):
-                method = str(device.get("monitoring_method") or "icmp").strip().lower()
                 row.update(
                     monitoring_enabled=True,
-                    monitoring_method=method if method in ("icmp", "ping", "tcp") else "icmp",
+                    monitoring_method="tcp",
+                    monitor_port=22,
                 )
             cached = previous_by_id.get(device["id"])
             if cached and (
@@ -282,12 +282,12 @@ class MonitoringService:
             is_switch = str(device.get("device_type", "")).lower() == "switch"
             if not device.get("monitoring_enabled") and not (poll_switches and is_switch):
                 continue
-            method = str(device.get("monitoring_method") or "icmp").strip().lower()
             devices.append(
                 {
                     **device,
                     "monitoring_enabled": True,
-                    "monitoring_method": method if method in ("icmp", "ping", "tcp") else "icmp",
+                    "monitoring_method": "tcp",
+                    "monitor_port": 22,
                 }
                 if poll_switches and is_switch else device
             )

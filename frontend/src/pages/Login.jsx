@@ -22,10 +22,11 @@ export default function Login() {
   return <div className="login-page"><div className="login-card">
     <div className="login-logo-banner"><NetOps360Logo size={88} variant="banner" /></div>
     <form className="login-form" onSubmit={submit}>
-      <p>Sign in with the account invited by your NetOps360 administrator.</p>
+      <p>Sign in with your NetOps360 account.</p>
       <label><span>Email</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
       <label><span>Password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
       <Link to="/forgot-password">Forgot password?</Link>
+      <Link to="/signup">Create a company account</Link>
       {(formError || error) && <p role="alert">{formError || error}</p>}
       <button type="submit" className="primary-button full-width" disabled={loading || Boolean(providerLoading)}>Sign in</button>
     </form>

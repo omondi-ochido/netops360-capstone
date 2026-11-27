@@ -9,6 +9,7 @@ Supabase PostgreSQL schema for NetOps360: six core operational tables, Auth/RBAC
 | `schema.sql` | Initial six-table schema, constraints, indexes, triggers, incident RPCs and RLS. Bootstrap for new installs. |
 | `migrations/202611230001_audit_logs.sql` | Adds migration version tracking and safe audit records without changing existing records. |
 | `migrations/202611230002_auth_rbac.sql` | Adds Auth profiles, seeded RBAC, revoked sessions, and last-Super-Admin protections. |
+| `migrations/202611270001_company_auth_onboarding.sql` | Adds company/inviter profile fields, atomic first-user/OAuth role provisioning, and assistant invite-slot reservations. |
 | `seed.sql` | 9 Main Site devices and 3 default rules. Idempotent (`ON CONFLICT DO NOTHING`). |
 
 ## Supabase setup
@@ -47,6 +48,7 @@ run as part of local development; credentials and the Supabase CLI were unavaila
 | `incidents` | Lifecycle open -> acknowledged -> resolved | **partial unique index** allows one active incident per device+rule; `resolved` <=> `resolved_at` set |
 | `config_backups` | Config snapshots | a `success` row cannot have empty config or a missing SHA-256 checksum |
 | `automation_logs` | n8n delivery tracking | status pending/running/success/failed, `retry_count`, request/response JSONB |
+| `company_assistant_invite_reservations` | Admin invite slot reservations | serializes the one-assistant limit by company/inviter during Supabase invitation delivery |
 
 ### Layer 2 switches
 The three GNS3 Ethernet switches have no IP stack, so they are seeded `monitoring_enabled=false`,

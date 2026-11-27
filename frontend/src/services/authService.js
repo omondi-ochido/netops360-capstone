@@ -7,11 +7,30 @@ export async function signIn(email, password) {
   return data.session;
 }
 
+export async function signUpCompany({ email, full_name, password, company_name }) {
+  const { data, error } = await getSupabaseClient().auth.signUp({
+    email: email.trim(),
+    password,
+    options: {
+      data: { full_name: full_name.trim(), company_name: company_name.trim() },
+      emailRedirectTo: `${window.location.origin}/auth/callback`,
+    },
+  });
+  if (error) throw error;
+  if (data.session) {
+    await apiRequest("/api/auth/onboard-company", {
+      method: "POST",
+      body: JSON.stringify({ full_name: full_name.trim(), company_name: company_name.trim() }),
+    });
+  }
+  return { hasSession: Boolean(data.session) };
+}
+
 export async function signInWithProvider(provider) {
   const scopes = provider === "azure" ? "email" : undefined;
   const { error } = await getSupabaseClient().auth.signInWithOAuth({
     provider,
-    options: { redirectTo: `${window.location.origin}/`, ...(scopes ? { scopes } : {}) },
+    options: { redirectTo: `${window.location.origin}/auth/callback`, ...(scopes ? { scopes } : {}) },
   });
   if (error) throw error;
 }

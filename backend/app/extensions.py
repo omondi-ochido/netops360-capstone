@@ -7,6 +7,7 @@ from flask_cors import CORS
 
 from app.services.automation_service import AutomationService
 from app.services.audit_service import AuditService
+from app.services.auth_service import AuthService
 from app.services.backup_service import BackupService
 from app.services.device_service import DeviceService
 from app.services.incident_service import IncidentService
@@ -27,6 +28,7 @@ class Container:
         self.config = config
         self.repo = repo
         self.audit = AuditService(repo)
+        self.auth = AuthService(repo)
         auth_admin = getattr(repo, "auth_admin", None)
         if auth_admin is None:
             auth_admin = getattr(getattr(getattr(repo, "client", None), "auth", None), "admin", None)

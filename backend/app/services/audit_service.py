@@ -15,7 +15,7 @@ SAFE_FIELDS = {
     "backup": ("id", "device_id", "backup_type", "status", "checksum"),
     "automation": ("id", "incident_id", "device_id", "rule_id", "trigger_type", "status",
                    "execution_id", "retry_count"),
-    "user": ("id", "email", "full_name", "phone_number", "account_status"),
+    "user": ("id", "email", "full_name", "phone_number", "company_name", "account_status"),
     "user_role": ("id", "user_id", "role_id", "assigned_by"),
 }
 
