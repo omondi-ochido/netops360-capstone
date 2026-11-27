@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name text NOT NULL,
     email text NOT NULL,
-    phone_number text,
+    phone_number INTEGER,
     account_status text NOT NULL DEFAULT 'active',
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
